@@ -30,6 +30,15 @@ Sendo um `program`, nao recebe `state`: e ele que CRIA o `FasstState` e o
 passa para todo o resto. `main(argv)` ocupa esse lugar, e
 `get_command_argument(1)` vira `sys.argv[1]`.
 
+`main()` e uma funcao unica e longa, nao um conjunto de helpers por STEP.
+Isso e deliberado: no Fortran e um `program`, ou seja UM escopo, e varias
+variaveis atravessam fronteiras de STEP de maneira que importa. O caso
+extremo e o ponto de atencao 5 (o `i` que sobra do laco do STEP 3 e e
+reusado na contagem de lacunas): ele so e reproduzivel com fidelidade se
+`i` for uma unica variavel local de `main`. Quebrar `main` em helpers
+criaria escopos novos que o original nao tem e consertaria defeitos por
+acidente.
+
 O driver e o dono de tres coisas que nenhum outro modulo pode assumir:
 
 1. As 15 unidades de arquivo (`open`/`close` nas linhas 225-1011 e
@@ -49,14 +58,20 @@ O driver e o dono de tres coisas que nenhum outro modulo pode assumir:
    consome varios valores por registro e continua no registro seguinte
    quando a lista nao cabe. `us_soil_tools._read_token` e o padrao de
    referencia da casa, mas le UM token por chamada e esta acoplado a
-   unidade 90 -- nao serve aqui, e nao sera refatorado.
+   unidade 90 -- nao serve aqui, e nao sera refatorado. A classe `_Unit`
+   deste modulo cobre os dois `read` que o driver usa (`read(u,'(a)')` e
+   `read(u,*)`) com a semantica de REGISTRO do Fortran, que e o que faz os
+   comentarios `!` de fim de linha funcionarem -- ver `_Unit.read_star`.
 
 Estado desta transcricao
 --------------------------
-EM ANDAMENTO (cronograma de 10 dias uteis). Hoje: esqueleto, docstring e
-os 5 stubs de dependencia externa. `main()` levanta `NotImplementedError`
--- os STEPs sao preenchidos nos dias 2-9. O modulo importa limpo de
-proposito, para que a verificacao do pacote possa rodar desde o Dia 1.
+EM ANDAMENTO (cronograma de 10 dias uteis).
+  Dia 1  esqueleto, docstring, os 5 stubs externos
+  Dia 2  `_Unit`/`_strip_comment`, secao de declaracoes, STEP 0 e o
+         cabecalho de `fassti.inp` (linhas 109-266)  <-- aqui
+`main()` levanta `NotImplementedError` no ponto exato onde a transcricao
+para, de modo que o que ja existe e executavel e verificavel (ver
+`demo()`).
 
 Dependencias externas
 -----------------------
@@ -82,6 +97,25 @@ transcricao de verdade chegar:
                                   posicao que o `.F90` chama `ii` e que o
                                   stub de `initsurface` chama `mpos`: e o
                                   mesmo parametro.
+
+Divergencias deliberadas
+--------------------------
+* `status='unknown'` nos 15 `open` do original significa "crie o arquivo
+  se nao existir". Ou seja: abrir um `fassti.inp` inexistente NAO falha no
+  Fortran -- cria um arquivo vazio, e so entao o `read` seguinte morre com
+  erro de runtime nao tratado (a linha 233 nao tem `iostat=`). Isso torna
+  praticamente mortos os 15 ramos "Error opening ..." do original. Aqui os
+  arquivos de ENTRADA sao abertos para leitura e a falha cai justamente no
+  ramo de erro do Fortran, com a mesma mensagem: um arquivo de entrada
+  que falta e um erro, nao um arquivo vazio recem-criado. Os arquivos de
+  SAIDA continuam sendo criados. Precedente de divergencia documentada:
+  `functions.map_usda_soiltype_to_uscs` (levanta `ValueError`).
+* Varias variaveis locais do original nunca sao inicializadas antes do
+  primeiro uso (`keep`, `lcount`, os arrays `soiltype1..4` / `lthick1..4`,
+  `nstr_flag`). Em Fortran ficam indefinidas -- o valor real depende do
+  compilador, e na pratica muitos zeram. Aqui sao zeros explicitos. Isso
+  importa no ponto de atencao 1, onde o bloco `nlayers1` LE posicoes que
+  nunca foram atribuidas.
 
 Pontos de atencao
 -------------------
@@ -114,7 +148,7 @@ correspondente do codigo, conforme for preenchido.
     contagem de lacunas indexa `metm(i,k,...)`. No ramo ponto-unico `i` e o
     sitio casado; no multiponto e um contador de linhas da unidade 5, sem
     relacao nenhuma. Python vai acidentalmente consertar OU acidentalmente
-    quebrar isso.
+    quebrar isso (ver "Arquitetura": e por isso que `main` e um escopo so).
 6.  STEP 4: os dois ramos sao ~90% iguais e NAO sao identicos. Linha 1185:
     `met(k,ip_upsol)-met(k,ip_tsol) > eps`; linha 1324:
     `met(k,ip_upsol) > met(k,ip_tsol)`. Linha 1275 usa `i <= met_count`;
@@ -137,7 +171,7 @@ correspondente do codigo, conforme for preenchido.
     (linhas 234, 257, 275, ...) da string VAZIA quando nao ha `!` no
     registro, porque `index` devolve 0 e `0-1 = -1`. A linha 878
     (`fasstusersoil = 'fasstusersoil.inp'` quando `lcount == 0`) existe
-    justamente para consertar esse efeito.
+    justamente para consertar esse efeito. Ver `_strip_comment`.
 
 Pendencias
 ------------
@@ -173,6 +207,30 @@ from .initwater import initwater
 from .initsurface import read_old_data
 
 
+# ---------------------------------------------------------------------------
+# `data` do original (linhas 97-106)
+# ---------------------------------------------------------------------------
+# data met_col/32/ -- numero de colunas lidas do arquivo met. NAO e o mesmo
+# que MAXCOL (35): ver ponto de atencao 8.
+MET_COL = 32
+
+# Conversao dos tipos de vegetacao MODIS e UMD para os defaults do FASST.
+# biome_source: FASST default = 0, MODIS/IGBP = 1000, UMD/LDAS = 2000.
+# Tabelas 1-based: slot fantasma no indice 0, como no resto do pacote.
+#                1  2  3  4   5   6   7   8  9 10  11  12 13 14  15 16
+_MODIS_TYPE = [0, 3, 6, 4, 5, 18, 16, 16, 18, 7, 2, 13, 10, 0, 1, 12, 8,
+#               17 18 19 20
+                14, 9, 9, 9]
+#              1  2  3  4   5  6  7   8   9 10 11 12 13  14
+_UMD_TYPE = [0, 3, 6, 5, 4, 18, 3, 2, 11, 11, 2, 1, 8, 0, 15]
+
+assert len(_MODIS_TYPE) == 21, "modis_type(20) + slot fantasma"
+assert len(_UMD_TYPE) == 15, "umd_type(14) + slot fantasma"
+
+
+# ---------------------------------------------------------------------------
+# helpers numericos (identicos aos de initsurface.py:157-170)
+# ---------------------------------------------------------------------------
 def _new_array(n, fill=0.0):
     """1-based com folga no indice 0 -- ver fasst/state.py, `_reals`/`_ints`."""
     return [fill] * (n + 1)
@@ -190,6 +248,137 @@ def _anint(x, p=0):
     xs = x * (10.0**p)
     ai = math.copysign(math.floor(abs(xs) + 0.5), xs)
     return ai * (10.0**-p)
+
+
+# ---------------------------------------------------------------------------
+# helpers de string/arquivo no estilo Fortran
+# ---------------------------------------------------------------------------
+def _strip_comment(s):
+    """O idioma `s(1:len_trim(s(1:index(s,'!')-1)))` do original.
+
+    Ponto de atencao 13: quando NAO ha `!` no registro, `index` devolve 0,
+    a substring fica `s(1:-1)` (comprimento zero) e o resultado e uma
+    string VAZIA -- nao a linha inteira. Aparece nas linhas 234, 257, 275,
+    284, 293, 302, 310, 629, 674 e 684 do original, e e a razao de existir
+    a linha 878.
+    """
+    p = s.find("!")
+    if p < 0:
+        return ""
+    return s[:p].rstrip()
+
+
+def _ch(s, i):
+    """`s(i:i)` num `character(len=N)`.
+
+    A variavel Fortran e preenchida com brancos ate o comprimento
+    declarado, entao um indice alem do texto devolve ' ' em vez de estourar.
+    """
+    return s[i - 1] if 1 <= i <= len(s) else " "
+
+
+def _stop(msg):
+    """`write(*,'(/,''...'',/)')` seguido de `stop`.
+
+    O FORMAT `(/,...,/)` do original imprime uma linha em branco antes e
+    depois da mensagem. Usado nos 8 pontos de validacao do STEP 1.
+    """
+    print()
+    print(msg)
+    print()
+    sys.exit(1)
+
+
+def _to_int(tok, current=0):
+    """Item list-directed inteiro. `None` (valor nulo) deixa a variavel
+    INALTERADA, como no Fortran."""
+    if tok is None:
+        return current
+    return int(tok)
+
+
+def _to_real(tok, current=0.0):
+    """Item list-directed real. `None` (valor nulo) deixa a variavel
+    INALTERADA. Aceita o expoente `d`/`D` do Fortran."""
+    if tok is None:
+        return current
+    return float(tok.replace("d", "e").replace("D", "E"))
+
+
+def _list_items(rec):
+    """Itens list-directed de UM registro; `None` = valor nulo explicito.
+
+    Separador Fortran: uma virgula (com brancos opcionais em volta) ou um
+    ou mais brancos. Duas virgulas seguidas, ou uma virgula inicial, sao um
+    valor nulo -- a variavel correspondente fica inalterada. Uma virgula no
+    FIM do registro nao e valor nulo: a leitura simplesmente continua no
+    registro seguinte. Um registro todo em branco nao tem item nenhum (nao
+    e um nulo), e a leitura segue adiante -- igual ao que
+    `us_soil_tools._read_token` ja documenta.
+    """
+    fields = rec.split(",")
+    items = []
+    for k, field in enumerate(fields):
+        toks = field.split()
+        if toks:
+            items.extend(toks)
+        elif k < len(fields) - 1:
+            items.append(None)
+    return items
+
+
+class _Unit:
+    """Um arquivo texto aberto, com a semantica de REGISTRO do Fortran.
+
+    Cobre os dois `read` que o driver usa. O ponto importante e que cada
+    `read` consome registros INTEIROS: o que sobra no ultimo registro usado
+    e descartado, e nunca aproveitado pelo `read` seguinte.
+
+    E exatamente isso que faz os comentarios `!` de fim de linha de
+    `fassti.inp` funcionarem com `read(4,*)`: a lista de variaveis e
+    satisfeita antes de a leitura chegar ao `!`, e o resto do registro vai
+    embora. Note que isso e um acidente feliz, nao tratamento de
+    comentario -- um registro com MENOS valores do que a lista pede faz o
+    Fortran continuar no registro seguinte, e ai um `!` seria lido como
+    valor e quebraria a leitura.
+    """
+
+    def __init__(self, path, mode="r"):
+        self.path = path
+        self.f = open(path, mode)
+
+    def read_a(self):
+        """`read(u,'(a)') s` -- um registro inteiro, sem o fim de linha."""
+        line = self.f.readline()
+        if line == "":
+            raise EOFError("fim do arquivo em read('(a)'): " + str(self.path))
+        return line.rstrip("\n").rstrip("\r")
+
+    def read_star(self, n):
+        """`read(u,*) v1,...,vn` -- leitura list-directed de `n` itens.
+
+        Devolve `n` tokens. `None` num slot significa valor nulo: no
+        Fortran a variavel correspondente fica inalterada (e por isso que
+        `_to_int`/`_to_real` recebem o valor atual). Um `/` encerra a
+        leitura e os itens restantes voltam como `None`.
+        """
+        out = []
+        terminated = False
+        while len(out) < n and not terminated:
+            line = self.f.readline()
+            if line == "":
+                raise EOFError("fim do arquivo em read(*): " + str(self.path))
+            for t in _list_items(line.rstrip("\n").rstrip("\r")):
+                if t is not None and t.startswith("/"):
+                    terminated = True
+                    break
+                out.append(t)
+                if len(out) == n:
+                    break
+        return (out + [None] * n)[:n]
+
+    def close(self):
+        self.f.close()
 
 
 # ---------------------------------------------------------------------------
@@ -269,20 +458,187 @@ def read_complex(state: FasstState, wtype, io, lcount, nm0, wvel, wdepth,
 def main(argv=None):
     """`program fasst_driver` (fasst_driver.F90, linhas 1-1480).
 
-    EM ANDAMENTO -- so o esqueleto existe. Os STEPs abaixo marcam as
-    fronteiras do original e a ordem em que serao preenchidos.
+    Um escopo unico e longo, de proposito -- ver "Arquitetura" na docstring
+    do modulo.
     """
+    if argv is None:
+        argv = sys.argv
+
+    # O `program` nao recebe estado: e ele que o cria.
+    state = FasstState()
+
+    # ---------------- declaracoes (linhas 61-97) ----------------
+    # Apenas os arrays: escalares nao precisam ser declarados em Python.
+    # O Fortran NAO inicializa nenhum destes (nem no STEP 0); aqui sao
+    # zeros explicitos -- ver "Divergencias deliberadas" e o ponto de
+    # atencao 1, onde o bloco `nlayers1` le posicoes nunca atribuidas.
+    nstr_flag = _new_array(MAXN, 0)              # integer nstr_flag(maxn)
+    soiltype1 = _new_array(3, 0)                 # integer soiltype1(3)
+    soiltype2 = _new_array(MAXN + 3, 0)          # integer soiltype2(maxn+3)
+    soiltype3 = _new_array(MAXN + 3, 0)
+    soiltype4 = _new_array(MAXN + 3, 0)
+    lthick1 = _new_array(3)                      # real lthick1(3)
+    lthick2 = _new_array(MAXN + 3)               # real lthick2(maxn+3)
+    lthick3 = _new_array(MAXN + 3)
+    lthick4 = _new_array(MAXN + 3)
+    sname = _new_array(MAXL, "    ")             # character(len=4) sname(maxl)
+    t1o = _new_array(MOVERLAP)                   # real t1o(moverlap)
+    timeo = [[0.0] * 5 for _ in range(MOVERLAP + 1)]   # real timeo(moverlap,4)
+
+    # Escalares que o original declara mas nao inicializa antes do primeiro
+    # uso (o Fortran os deixa indefinidos) -- ver "Divergencias".
+    keep = 0
+    lcount = 0
+    wtype = 0
+    wvel = 0.0
+    wdepth = 0.0
+    ttest = " "
+    mtest = " "
+
+    it = 0.0
+    et = 0.0
     it = time.process_time()                                   # call cpu_time(it)
 
-    # STEP 0   (109-176)   inicializa variaveis
-    # STEP 1   (178-699)   le o arquivo de controle
-    # STEP 2   (702-822)   le o arquivo meteorologico
-    # STEP 3   (825-1153)  abre unidades, hot start, lacunas, aloca
-    # STEP 4   (1156-1425) lacos principais (ponto unico / multiponto)
-    # STEP 6   (1433-1480) fecha arquivos, desaloca, tempo de CPU
+    # ---------------- STEP 0 (linhas 114-174) ----------------
+    # inicializa algumas variaveis
+    state.single_multi_flag = 0
+    state.infer_test = 0
+    vegint = 0.0
+    nprint = 0
+    flprint = 0
+    sprint = 0
+    frozen = 100
+    state.istart = 0
+    state.iend = 0
+    state.oldpos = 0
+    state.mpos = 0
+    iendi = 0
+    wstart = 0
+    wflag2 = 0
+    nlayers1 = 0
+    fasst_input = " "
+    met_file_name = " "
+    fasstusersoil = "fasstusersoil.inp"
+    fasstoutmta = "fasstout.mta"                 # so para makemtafasstout, que esta
+    groundoutmta = "groundout.mta"               # comentada no original (1428-1430)
+    vitd_input = " "
+    output1 = " "
+    output2 = " "
+    output3 = " "
+    output4 = " "
+    output5 = " "
+    ro1 = " "
+    ro2 = " "
+    ro1o = " "
+    ro2o = " "
+
+    state.biome_source = 0
+    state.new_vtl = 0
+    state.new_vth = 0
+    icnti = 0
+    state.ncols = 0
+    pindex = 0
+    state.met_count = 0
+    state.mstflag = 0
+    npos = 0
+    ijunk = 0
+    lis = 0
+    fnlen = 0
+    mlen = 0
+    state.elev = 0.0
+    state.lat = 0.0
+    state.mlong = 0.0
+    state.mflag = 0.0
+    state.timeoffset = 0.0
+    state.timstep = 0.0
+    state.iheight = 0.0
+    junk = 0.0
+    rtstps = 0.0
+    surfdepth = 0.0
+    d1 = 0.0
+    d2 = 0.0
+    mody = 0.0
+    modyo = 0.0
+    daylim = 0.0
+
+    # ---------------- STEP 1 (linhas 178-699) ----------------
+    # Este arquivo contem a informacao necessaria para rodar o modelo: por
+    # exemplo o tipo de solo, o numero de camadas, dados de perfil inicial
+    # e informacao de profundidade de neve.
+
+    # Se existir argumento de linha de comando, usa os nomes de arquivo
+    # dele (linha 184).
+    if len(argv) > 1:
+        fasst_input = argv[1]
+    fasst_input = fasst_input.rstrip()           # fasst_input(1:len_trim(fasst_input))
+
+    # Linhas 214-221 -- ponto de atencao 2: a condicao do `do while` compara
+    # `fp` com o MESMO literal nos dois lados do `.or.`, logo e sempre
+    # verdadeira e o laco so para por `dirpos > 1`. Consequencias: o
+    # `if(dirpos == 0)` da linha 221 e inalcancavel, e `dirpos`/`fp` nunca
+    # sao lidos depois daqui. Codigo morto preservado como no original.
+    dirpos = len(fasst_input.rstrip()) + 1
+    fp = _ch(fasst_input, dirpos)
+    while dirpos > 1:                            # a tautologia do `.or.` sempre vale
+        dirpos = dirpos - 1
+        fp = _ch(fasst_input, dirpos)
+    if dirpos == 0:                              # inalcancavel (ver acima)
+        dirpos = 1
+
+    # abre o arquivo de entrada (linhas 224-230)
+    io = 0
+    try:
+        unit4 = _Unit(fasst_input)
+    except OSError as err4:
+        # Ver "Divergencias deliberadas": no original `status='unknown'`
+        # criaria o arquivo e a falha so apareceria no `read` seguinte.
+        io = err4.errno or 1
+        print(" Error opening FASST input file = %s error=%3d" % (fasst_input, io))
+        sys.exit(1)
+
+    # le o arquivo de entrada (linhas 233-266)
+    met_file_name = unit4.read_a()
+    met_file_name = _strip_comment(met_file_name)        # ponto de atencao 13
+    mlen = len(met_file_name.rstrip())
+
+    tok = unit4.read_star(4)
+    state.infer_test = _to_int(tok[0], state.infer_test)
+    state.single_multi_flag = _to_int(tok[1], state.single_multi_flag)
+    state.mgap = _to_real(tok[2], state.mgap)
+    keep = _to_int(tok[3], keep)
+    if state.infer_test != 1 and state.infer_test != 0:
+        _stop("!!! The infer test flag must be 0 or 1, stopping. !!!")
+
+    state.oldpos = 1
+    state.istart = 1
+    if state.infer_test == 1:
+        state.istart = 2
+        ro1o = unit4.read_a()                    # dados antigos que inicializam a nova execucao
+        ro1o = _strip_comment(ro1o)
+
+    # mstflag: 0 = produto AFWA, nao usar temperatura de solo medida
+    #          1 = outro
+    tok = unit4.read_star(7)
+    state.gwl = _to_real(tok[0], state.gwl)
+    vegint = _to_real(tok[1], vegint)
+    nprint = _to_int(tok[2], nprint)
+    flprint = _to_int(tok[3], flprint)
+    sprint = _to_int(tok[4], sprint)
+    frozen = _to_int(tok[5], frozen)
+    state.mstflag = _to_int(tok[6], state.mstflag)
+
+    # ------------------------------------------------------------------
+    # A transcricao para aqui (linha 266 do original). Proximos passos:
+    #   STEP 1   (268-699)   ramo de ponto unico e ramo multiponto
+    #   STEP 2   (702-822)   le o arquivo meteorologico
+    #   STEP 3   (825-1153)  abre unidades, hot start, lacunas, aloca
+    #   STEP 4   (1156-1425) lacos principais
+    #   STEP 6   (1433-1480) fecha arquivos, desaloca, tempo de CPU
+    # ------------------------------------------------------------------
+    unit4.close()
     raise NotImplementedError(
-        "transcricao de fasst_driver.F90 em andamento: STEP 0-6 ainda nao "
-        "preenchidos (ver 'Estado desta transcricao' na docstring do modulo)"
+        "transcricao de fasst_driver.F90 em andamento: parou na linha 266 "
+        "do original (fim do cabecalho de fassti.inp)"
     )
 
     et = time.process_time()                                   # call cpu_time(et)
@@ -290,5 +646,88 @@ def main(argv=None):
     print(" total run time: ", et - it)
 
 
+# ---------------------------------------------------------------------------
+# Verificacao executavel (cresce a cada dia do cronograma)
+# ---------------------------------------------------------------------------
+def demo():
+    """Checagens minimas do que ja esta transcrito. `python -m fasst.fasst_driver --demo`"""
+    import tempfile
+    import os
+
+    # ---- _strip_comment: ponto de atencao 13 ----
+    assert _strip_comment("met.dat   ! o arquivo met") == "met.dat"
+    assert _strip_comment("  met.dat !x") == "  met.dat"      # brancos a esquerda ficam
+    assert _strip_comment("met.dat") == ""                    # SEM `!` -> vazio, nao a linha
+    assert _strip_comment("!tudo comentario") == ""
+    assert _strip_comment("") == ""
+
+    # ---- _ch: `s(i:i)` com preenchimento de brancos ----
+    assert _ch("abc", 1) == "a"
+    assert _ch("abc", 3) == "c"
+    assert _ch("abc", 4) == " "                               # alem do texto
+    assert _ch("abc", 0) == " "
+
+    # ---- _list_items: separadores e valores nulos ----
+    assert _list_items("1 2 3") == ["1", "2", "3"]
+    assert _list_items("1,2,3") == ["1", "2", "3"]
+    assert _list_items("1, ,3") == ["1", None, "3"]            # virgula dupla -> nulo
+    assert _list_items("1,,3") == ["1", None, "3"]
+    assert _list_items(",5") == [None, "5"]                    # virgula inicial -> nulo
+    assert _list_items("1 2,") == ["1", "2"]                   # virgula final NAO e nulo
+    assert _list_items("   ") == []                            # registro em branco: sem itens
+    assert _list_items("") == []
+
+    # ---- _Unit.read_star: semantica de registro ----
+    d = tempfile.mkdtemp()
+    p = os.path.join(d, "rec.inp")
+    with open(p, "w") as f:
+        # registro 1 tem so 2 itens para uma lista de 3: a leitura continua
+        # no registro 2, e o que sobra DELE ("4 5") e descartado.
+        f.write("1 2\n3 4 5\n6   ! comentario\n7 / 9\n")
+    u = _Unit(p)
+    assert u.read_star(3) == ["1", "2", "3"]
+    assert u.read_star(1) == ["6"]                             # "4 5" foi descartado
+    assert u.read_star(3) == ["7", None, None]                 # `/` encerra a leitura
+    u.close()
+
+    # ---- conversores list-directed ----
+    assert _to_int("42") == 42
+    assert _to_int(None, 7) == 7                               # valor nulo: inalterado
+    assert _to_real("1.5d2") == 150.0                          # expoente `d` do Fortran
+    assert _to_real(None, 2.5) == 2.5
+
+    # ---- cabecalho de fassti.inp: STEP 0 + linhas 178-266 ----
+    p2 = os.path.join(d, "fassti.inp")
+    with open(p2, "w") as f:
+        f.write("c:/met/yuma.met              ! arquivo met\n")
+        f.write("0 0 0.5 1                    ! infer_test, single_multi, mgap, keep\n")
+        f.write("1.5 0.0 1 1 0 100 0          ! gwl, vegint, nprint, flprint, sprint, frozen, mstflag\n")
+    st = FasstState()
+    u = _Unit(p2)
+    assert _strip_comment(u.read_a()) == "c:/met/yuma.met"
+    t = u.read_star(4)
+    st.infer_test = _to_int(t[0], st.infer_test)
+    st.single_multi_flag = _to_int(t[1], st.single_multi_flag)
+    st.mgap = _to_real(t[2], st.mgap)
+    assert (st.infer_test, st.single_multi_flag, st.mgap, _to_int(t[3])) == (0, 0, 0.5, 1)
+    t = u.read_star(7)
+    st.gwl = _to_real(t[0], st.gwl)
+    st.mstflag = _to_int(t[6], st.mstflag)
+    assert st.gwl == 1.5
+    assert [_to_int(t[i]) for i in (2, 3, 4, 5)] == [1, 1, 0, 100]
+    assert st.mstflag == 0
+    u.close()
+
+    # ---- `data` do original ----
+    assert _MODIS_TYPE[14] == 1 and _MODIS_TYPE[20] == 9       # linhas 102-104
+    assert _UMD_TYPE[1] == 3 and _UMD_TYPE[14] == 15           # linha 106
+    assert MET_COL == 32 and MAXCOL == 35                      # ponto de atencao 8
+
+    print("demo OK")
+
+
 if __name__ == "__main__":
-    main(sys.argv)
+    if len(sys.argv) > 1 and sys.argv[1] == "--demo":
+        demo()
+    else:
+        main(sys.argv)
