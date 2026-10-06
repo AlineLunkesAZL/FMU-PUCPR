@@ -455,7 +455,7 @@ def read_complex(state: FasstState, wtype, io, lcount, nm0, wvel, wdepth,
 # ---------------------------------------------------------------------------
 # program fasst_driver
 # ---------------------------------------------------------------------------
-def main(argv=None):
+def main(argv=None, _state=None):
     """`program fasst_driver` (fasst_driver.F90, linhas 1-1480).
 
     Um escopo unico e longo, de proposito -- ver "Arquitetura" na docstring
@@ -465,7 +465,13 @@ def main(argv=None):
         argv = sys.argv
 
     # O `program` nao recebe estado: e ele que o cria.
-    state = FasstState()
+    # ponytail: `_state` e gancho de teste -- deixa o `demo()` inspecionar o
+    # FasstState pelo caminho de codigo REAL enquanto `main` ainda para no
+    # meio da transcricao. Sem ele, os ~590 linhas de parsing dos dias 3-5
+    # (a classe de bug dominante) so teriam verificacao no Dia 9. Remover
+    # quando `main` rodar ate o fim e o estado puder ser conferido pelas
+    # saidas.
+    state = _state if _state is not None else FasstState()
 
     # ---------------- declaracoes (linhas 61-97) ----------------
     # Apenas os arrays: escalares nao precisam ser declarados em Python.
@@ -486,8 +492,15 @@ def main(argv=None):
     timeo = [[0.0] * 5 for _ in range(MOVERLAP + 1)]   # real timeo(moverlap,4)
 
     # Escalares que o original declara mas nao inicializa antes do primeiro
-    # uso (o Fortran os deixa indefinidos) -- ver "Divergencias".
+    # uso (o Fortran os deixa indefinidos) -- ver "Divergencias". Os sete
+    # ultimos sao `intent(out)` de `zero_parameters`, que so e chamada
+    # dentro dos ramos de ponto unico/multiponto: no ramo de
+    # `single_multi_flag` invalido eles ficam sem valor nenhum no original.
     keep = 0
+    tflag = 0
+    nt0 = 0
+    nm0 = 0
+    stflag = 0
     lcount = 0
     wtype = 0
     wvel = 0.0
@@ -627,9 +640,113 @@ def main(argv=None):
     frozen = _to_int(tok[5], frozen)
     state.mstflag = _to_int(tok[6], state.mstflag)
 
+    # ---- ramo de ponto unico (linhas 268-670) ----
+    if state.single_multi_flag == 0:
+        zp = zero_parameters(state)
+        # `zero_parameters` preserva tudo que foi lido acima (infer_test,
+        # single_multi_flag, mgap, oldpos, istart, gwl, mstflag) e zera
+        # exatamente os campos que este bloco vai ler em seguida.
+        tflag = zp.tflag
+        nt0 = zp.nt0
+        nm0 = zp.nm0
+        stflag = zp.stflag
+        lcount = zp.lcount
+        wtype = zp.wtype                             # = int(SPFLAG) = 999
+        wvel = zp.wvel                               # = SPFLAG
+        wdepth = zp.wdepth                           # = SPFLAG (ver sentinela abaixo)
+        ttest = zp.ttest
+        mtest = zp.mtest
+        sname = zp.sname
+
+        tok = unit4.read_star(1)
+        state.vitd_index = _to_int(tok[0], state.vitd_index)
+
+        # Os cinco nomes de arquivo de saida passam pelo mesmo strip do
+        # ponto de atencao 13: uma linha SEM `!` deixa o nome VAZIO. Para
+        # `fasstusersoil` a linha 878 conserta isso depois; para estes cinco
+        # nao ha conserto nenhum -- o `open` do STEP 3 recebe nome vazio.
+        output1 = _strip_comment(unit4.read_a())     # met and surface data
+        output2 = _strip_comment(unit4.read_a())     # vertical profile data
+        output3 = _strip_comment(unit4.read_a())     # surface flux data
+        output4 = _strip_comment(unit4.read_a())     # vegetation temperature output data
+        output5 = _strip_comment(unit4.read_a())     # snow processes output data
+
+        # graus a partir da horizontal, graus a partir do N
+        tok = unit4.read_star(2)
+        state.slope_fasst = _to_real(tok[0], state.slope_fasst)
+        state.aspect = _to_real(tok[1], state.aspect)
+        # PI aqui e a constante do fasst_global (3.141592654, truncada), nao
+        # `math.pi` -- ver fasst/constants.py.
+        state.sloper = max(0.0, min(1.57, state.slope_fasst * PI / 1.8e2))
+        state.sloper = _anint(state.sloper, 20)
+        # `sloper` e calculado ANTES da validacao, como no original: um
+        # slope invalido ainda e convertido e so entao o programa para.
+        if state.slope_fasst > 90.0:
+            _stop("!!! Slope can not be greater than 90, stopping. !!!")
+
+        if abs(state.aspect) > 360.0:
+            _stop("!!! Aspect can not be greater than +/-360, stopping. !!!")
+
+        tok = unit4.read_star(1)
+        state.rough = _to_real(tok[0], state.rough)  # rugosidade da superficie (m)
+
+        # determina se o poligono e agua aberta (1) ou terra (0)
+        tok = unit4.read_star(1)
+        state.water_flag = _to_int(tok[0], state.water_flag)
+        if state.water_flag != 1 and state.water_flag != 0:
+            _stop("!!! Open water flag must be 0 or 1, stopping. !!!")
+
+        if state.water_flag == 1:
+            tok = unit4.read_star(1)
+            wtype = _to_int(tok[0], wtype)           # 1 = lagos, lagoas; 2 = rios
+            if wtype == 2:
+                state.water_flag = 2
+            tok = unit4.read_star(1)
+            wdepth = _to_real(tok[0], wdepth)
+            tok = unit4.read_star(1)
+            wvel = _to_real(tok[0], wvel)
+
+            state.soiltype[1] = 26                   # WAter
+            state.lthick[1] = 2e-2
+            state.soiltype[2] = 26
+            state.soiltype[3] = 7                    # SM
+            # `aint((wdepth-spflag)*1d5)*1d-5`: testa se `wdepth` difere do
+            # sentinela. `zero_parameters` o deixa em SPFLAG, entao so um
+            # valor realmente lido do arquivo passa aqui -- um item nulo
+            # (virgula dupla) mantem o sentinela e cai no `else`.
+            if abs(_aint(wdepth - SPFLAG, 5)) > EPS:
+                state.lthick[2] = wdepth - state.lthick[1]
+            else:
+                if wtype == 1:
+                    state.lthick[2] = 1e1 - state.lthick[1]
+                else:
+                    state.lthick[2] = 3e0 - state.lthick[1]
+            state.lthick[3] = 1e0
+            state.nlayers = 3
+
+        if state.infer_test == 0:
+            # profundidade inicial de neve (m), equivalente em agua (m)
+            tok = unit4.read_star(2)
+            state.hsaccum = _to_real(tok[0], state.hsaccum)
+            state.iswe = _to_real(tok[1], state.iswe)
+            if state.hsaccum < 0.0:
+                _stop("!!! Initial snow depth can not be less than 0, stopping. !!!")
+
+            if state.iswe < 0.0:
+                _stop("!!! Initial snow water equivalent can not be less than 0, "
+                      "stopping. !!!")
+
+            tok = unit4.read_star(1)
+            state.hi = _to_real(tok[0], state.hi)    # espessura inicial de gelo (m)
+            if state.hi < 0.0:
+                _stop("!!! Initial ice thickness can not be less than 0, stopping. !!!")
+
     # ------------------------------------------------------------------
-    # A transcricao para aqui (linha 266 do original). Proximos passos:
-    #   STEP 1   (268-699)   ramo de ponto unico e ramo multiponto
+    # A transcricao para aqui: linha 386 do original (fim do bloco de neve
+    # e gelo iniciais). Falta:
+    #   STEP 1   (388-670)   vegetacao baixa/alta, camadas de solo, perfil
+    #                        inicial de temperatura e umidade
+    #   STEP 1   (672-696)   ramo multiponto (single_multi_flag == 1)
     #   STEP 2   (702-822)   le o arquivo meteorologico
     #   STEP 3   (825-1153)  abre unidades, hot start, lacunas, aloca
     #   STEP 4   (1156-1425) lacos principais
@@ -637,8 +754,8 @@ def main(argv=None):
     # ------------------------------------------------------------------
     unit4.close()
     raise NotImplementedError(
-        "transcricao de fasst_driver.F90 em andamento: parou na linha 266 "
-        "do original (fim do cabecalho de fassti.inp)"
+        "transcricao de fasst_driver.F90 em andamento: parou na linha 386 "
+        "do original (neve e gelo iniciais, ramo de ponto unico)"
     )
 
     et = time.process_time()                                   # call cpu_time(et)
@@ -722,6 +839,113 @@ def demo():
     assert _MODIS_TYPE[14] == 1 and _MODIS_TYPE[20] == 9       # linhas 102-104
     assert _UMD_TYPE[1] == 3 and _UMD_TYPE[14] == 15           # linha 106
     assert MET_COL == 32 and MAXCOL == 35                      # ponto de atencao 8
+
+    # ---- STEP 1 ponto unico (linhas 268-386), pelo caminho de main() ----
+    def _run(linhas):
+        """Roda `main` ate onde a transcricao chegou e devolve o estado."""
+        import contextlib
+        import io as _io
+        caminho = os.path.join(d, "caso.inp")
+        with open(caminho, "w") as f:
+            f.write(linhas)
+        st = FasstState()
+        saida = _io.StringIO()
+        with contextlib.redirect_stdout(saida):
+            try:
+                main(["fasst_driver", caminho], _state=st)
+            except NotImplementedError:
+                pass                                  # parou na linha 386
+        return st, saida.getvalue()
+
+    _CABECALHO = (
+        "yuma.met                     ! met\n"
+        "0 0 0.5 1                    ! infer_test, single_multi, mgap, keep\n"
+        "1.5 0.0 1 1 0 100 0          ! gwl, vegint, nprint..., mstflag\n"
+        "1234                         ! vitd_index\n"
+        "saida.fst                    ! output1\n"
+        "saida.grd                    ! output2\n"
+        "saida.flx                    ! output3\n"
+        "saida.vgt                    ! output4\n"
+        "saida.snw                    ! output5\n"
+    )
+
+    # terra (water_flag = 0)
+    st, _ = _run(_CABECALHO + (
+        "30.0 180.0                   ! slope, aspect\n"
+        "0.01                         ! rough\n"
+        "0                            ! water_flag\n"
+        "0.3 0.05                     ! hsaccum, iswe\n"
+        "0.02                         ! hi\n"
+    ))
+    assert st.vitd_index == 1234
+    assert st.slope_fasst == 30.0 and st.aspect == 180.0
+    assert abs(st.sloper - 0.5235987756666667) < 1e-15        # 30 graus com PI truncado
+    assert st.rough == 0.01
+    assert st.water_flag == 0
+    assert st.hsaccum == 0.3 and st.iswe == 0.05 and st.hi == 0.02
+    assert st.nlayers == 0                                     # bloco de agua nao rodou
+
+    # agua aberta com profundidade informada (linhas 344-365)
+    st, _ = _run(_CABECALHO + (
+        "0.0 0.0\n"
+        "0.01\n"
+        "1                            ! water_flag\n"
+        "1                            ! wtype: lagos/lagoas\n"
+        "5.0                          ! wdepth\n"
+        "0.0                          ! wvel\n"
+        "0.0 0.0\n"
+        "0.0\n"
+    ))
+    assert st.water_flag == 1 and st.nlayers == 3
+    assert list(st.soiltype[1:4]) == [26, 26, 7]
+    assert st.lthick[1] == 2e-2 and st.lthick[2] == 5.0 - 2e-2 and st.lthick[3] == 1.0
+
+    # wtype = 2 (rios) muda water_flag para 2
+    st, _ = _run(_CABECALHO + "0.0 0.0\n0.01\n1\n2\n5.0\n0.5\n0.0 0.0\n0.0\n")
+    assert st.water_flag == 2
+
+    # `wdepth` nulo (virgula sozinha) mantem o sentinela SPFLAG e cai no
+    # `else`: lagos -> 10 m, rios -> 3 m
+    st, _ = _run(_CABECALHO + "0.0 0.0\n0.01\n1\n1\n,\n0.0\n0.0 0.0\n0.0\n")
+    assert st.lthick[2] == 1e1 - 2e-2
+    st, _ = _run(_CABECALHO + "0.0 0.0\n0.01\n1\n2\n,\n0.0\n0.0 0.0\n0.0\n")
+    assert st.lthick[2] == 3e0 - 2e-2
+
+    # infer_test = 1 pula o bloco de neve/gelo e consome a linha de ro1o
+    st, _ = _run(
+        "yuma.met    ! met\n"
+        "1 0 0.5 1   ! infer_test = 1\n"
+        "velho_ro_soil.dat ! ro1o\n"
+        "1.5 0.0 1 1 0 100 0\n"
+        "1234\n" + "saida.fst !\n" * 5 +
+        "0.0 0.0\n0.01\n0\n"
+    )
+    assert st.istart == 2 and st.hsaccum == 0.0 and st.hi == 0.0
+
+    # ---- as validacoes que param o programa (6 pontos do STEP 1) ----
+    def _para(linhas, trecho):
+        import contextlib
+        import io as _io
+        caminho = os.path.join(d, "ruim.inp")
+        with open(caminho, "w") as f:
+            f.write(linhas)
+        saida = _io.StringIO()
+        try:
+            with contextlib.redirect_stdout(saida):
+                main(["fasst_driver", caminho], _state=FasstState())
+        except SystemExit as e:
+            assert e.code == 1
+            assert trecho in saida.getvalue(), saida.getvalue()
+            return
+        raise AssertionError("deveria ter parado: " + trecho)
+
+    _para("m.met !\n2 0 0.5 1 !\n", "infer test flag must be 0 or 1")
+    _para(_CABECALHO + "91.0 0.0\n", "Slope can not be greater than 90")
+    _para(_CABECALHO + "0.0 361.0\n", "Aspect can not be greater than +/-360")
+    _para(_CABECALHO + "0.0 0.0\n0.01\n2\n", "Open water flag must be 0 or 1")
+    _para(_CABECALHO + "0.0 0.0\n0.01\n0\n-1.0 0.0\n", "snow depth can not be less than 0")
+    _para(_CABECALHO + "0.0 0.0\n0.01\n0\n0.0 -1.0\n", "snow water equivalent can not")
+    _para(_CABECALHO + "0.0 0.0\n0.01\n0\n0.0 0.0\n-1.0\n", "ice thickness can not be less")
 
     print("demo OK")
 
