@@ -68,7 +68,12 @@ Estado desta transcricao
 EM ANDAMENTO (cronograma de 10 dias uteis).
   Dia 1  esqueleto, docstring, os 5 stubs externos
   Dia 2  `_Unit`/`_strip_comment`, secao de declaracoes, STEP 0 e o
-         cabecalho de `fassti.inp` (linhas 109-266)  <-- aqui
+         cabecalho de `fassti.inp` (linhas 109-266)
+  Dia 3  saidas, declive, rugosidade, agua aberta, neve/gelo (268-386)
+  Dia 4  vegetacao baixa e alta, mapeamento MODIS/UMD (388-534)
+  Dia 5  camadas de solo, bloco de fusao, perfis iniciais, ramo
+         multiponto, `sort2` (536-699 e 1483-1534)
+  Dia 6  STEP 2 -- leitura do arquivo meteorologico (702-822)  <-- aqui
 `main()` levanta `NotImplementedError` no ponto exato onde a transcricao
 para, de modo que o que ja existe e executavel e verificavel (ver
 `demo()`).
@@ -227,7 +232,29 @@ correspondente do codigo, conforme for preenchido.
     guarda `if(error_code == 1.and.single_multi_flag == 0)`, mas a 1358
     esta DENTRO do ramo `single_multi_flag == 1` -- nunca dispara.
 8.  `met_col = 32` vs `MAXCOL = 35` (linha 97, lido na 796): a coluna 33
-    (`MetCol.HI`) nunca e lida do arquivo e fica com `mflag`.
+    (`MetCol.HI`) nunca e lida do arquivo e fica com `mflag`. Com
+    `ncols <= 32` as colunas 34 e 35 tambem ficam.
+15. Os conjuntos "lido" e "quantizado" nao batem no ramo `ncols > met_col`
+    (796-800): a leitura cobre as colunas 1..32, 34 e 35, mas o laco de
+    quantizacao vai de 1 a `met_col+2` = 34. Resultado, com as tres pontas
+    observaveis:
+    * a coluna 34 (VIS) e lida E quantizada;
+    * a coluna 35 (AER) e lida e NAO quantizada -- fica com o valor cru;
+    * a coluna 33 (HI) nao e lida mas E quantizada, e por causa do ponto 16
+      isso tira o sentinela da igualdade: `mflag = -999.0` sai de la como
+      -999.0000000000001. E provavelmente por isso que todo teste de dado
+      faltante no codigo usa TOLERANCIA (linha 1176:
+      `aint(dabs(met(k,ip_zen)-mflag)*1d5)*1d-5 > eps`) e nunca igualdade.
+16. `anint(x*1d15)*1d-15` (linhas 799 e 804) NAO e identidade. Nem `1d15`
+    nem `1d-15` sao exatos em binario, e para x acima de ~9 o produto
+    `x*1d15` ja passa de 2^53, onde o espacamento entre doubles e maior
+    que 1 -- entao a ida e volta perde bits. 7.0 vira 7.000000000000001,
+    12.0 vira 12.000000000000002, 1013.0 vira 1013.0000000000001; outros
+    (0.2, 180.0) sobrevivem por sorte de arredondamento. Ou seja: TODO
+    valor meteorologico entra no modelo levemente diferente do que esta no
+    arquivo. O mesmo vale para o `anint(.,10)` do cabecalho e para o
+    `anint(.,20)` do `sloper` (onde 1.57 volta 1.5699999999999998). Nao e
+    defeito de transcricao -- e a aritmetica IEEE do original, preservada.
 9.  `tstps == 0` quando `timstep <= 0` (linha 1092): `rtstps` fica 0, logo
     `msteps1 = 0` sempre e nenhuma lacuna e detectada.
 10. Linhas 565-572: `soiltype(2) = soiltype(1)` acontece ANTES de
@@ -266,6 +293,8 @@ Pendencias
 import math
 import sys
 import time
+
+import numpy as np
 
 from .constants import EPS, MAXCOL, MAXL, MAXN, MOVERLAP, NCLAYERS, PI, SPFLAG, TREF
 from .indices import MetCol
@@ -454,11 +483,45 @@ class _Unit:
         self.f = open(path, mode)
 
     def read_a(self):
-        """`read(u,'(a)') s` -- um registro inteiro, sem o fim de linha."""
+        """`read(u,'(a)') s` -- um registro inteiro, sem o fim de linha.
+
+        Sem `iostat=`: o fim de arquivo e erro de runtime, como no Fortran.
+        """
         line = self.f.readline()
         if line == "":
             raise EOFError("fim do arquivo em read('(a)'): " + str(self.path))
         return line.rstrip("\n").rstrip("\r")
+
+    def read_a_io(self, current=""):
+        """`read(u,'(a)',iostat=io) s` -- devolve `(s, io)`.
+
+        Com `iostat=`, o fim de arquivo nao e erro: `io` volta -1 e a
+        variavel fica INALTERADA, por isso o `current` de volta. Isso nao e
+        detalhe: o laco de contagem de linhas do STEP 2 (738-754) continua
+        escaneando `a` depois do EOF, e como `a` ainda tem a ULTIMA linha de
+        dados, ela e contada DUAS vezes. O `ntlines - 1` da linha 759 e o
+        que compensa esse duplo.
+        """
+        line = self.f.readline()
+        if line == "":
+            return current, -1
+        return line.rstrip("\n").rstrip("\r"), 0
+
+    def read_star_io(self, n):
+        """`read(u,*,iostat=io) v1,...,vn` -- devolve `(tokens, io)`.
+
+        `io` = -1 no fim de arquivo; nesse caso os itens que faltaram voltam
+        como `None`, o que faz `_to_int`/`_to_real` manterem o valor atual
+        (= variavel inalterada, como no Fortran).
+        """
+        try:
+            return self.read_star(n), 0
+        except EOFError:
+            return [None] * n, -1
+
+    def rewind(self):
+        """`rewind(u)` -- volta ao primeiro registro."""
+        self.f.seek(0)
 
     def read_star(self, n):
         """`read(u,*) v1,...,vn` -- leitura list-directed de `n` itens.
@@ -561,7 +624,7 @@ def read_complex(state: FasstState, wtype, io, lcount, nm0, wvel, wdepth,
 # ---------------------------------------------------------------------------
 # program fasst_driver
 # ---------------------------------------------------------------------------
-def main(argv=None, _state=None):
+def main(argv=None, _state=None, _locals=None):
     """`program fasst_driver` (fasst_driver.F90, linhas 1-1480).
 
     Um escopo unico e longo, de proposito -- ver "Arquitetura" na docstring
@@ -571,12 +634,15 @@ def main(argv=None, _state=None):
         argv = sys.argv
 
     # O `program` nao recebe estado: e ele que o cria.
-    # ponytail: `_state` e gancho de teste -- deixa o `demo()` inspecionar o
-    # FasstState pelo caminho de codigo REAL enquanto `main` ainda para no
-    # meio da transcricao. Sem ele, os ~590 linhas de parsing dos dias 3-5
-    # (a classe de bug dominante) so teriam verificacao no Dia 9. Remover
-    # quando `main` rodar ate o fim e o estado puder ser conferido pelas
-    # saidas.
+    # ponytail: `_state` e `_locals` sao ganchos de teste -- deixam o
+    # `demo()` inspecionar o estado E as variaveis locais pelo caminho de
+    # codigo REAL enquanto `main` ainda para no meio da transcricao. Sem
+    # eles, as ~700 linhas de parsing dos dias 2-6 (a classe de bug
+    # dominante) ficariam quase sem verificacao: metade do que o STEP 1 e o
+    # STEP 2 produzem -- `metm`, `latm`, `icnti`, `output1..5`,
+    # `fasstusersoil`, `sname`, `surfdepth` -- sao LOCAIS do `program`, nao
+    # campos de `FasstState`. Remover no Dia 9, quando `main` rodar ate o
+    # fim e essas coisas ficarem observaveis pelos arquivos de saida.
     state = _state if _state is not None else FasstState()
 
     # ---------------- declaracoes (linhas 61-97) ----------------
@@ -1231,18 +1297,182 @@ def main(argv=None, _state=None):
 
     unit4.close()                                            # fecha o arquivo de entrada
 
+    # ---------------- STEP 2 (linhas 702-822) ----------------
+    # Le o meteorologico do arquivo apropriado. TODOS os valores sao lidos
+    # de uma vez; o modelo depois itera sobre eles. As condicoes
+    # meteorologicas sao as condicoes de contorno do sistema de equacoes.
+
+    # abre o arquivo met (linhas 708-715)
+    io = 0
+    try:
+        unit1 = _Unit(met_file_name)
+    except OSError as err1:
+        io = err1.errno or 1
+        print(" Error opening met file, error=%3d" % io)
+        print(" ")
+        print(met_file_name)
+        sys.exit(1)
+
+    # Cabecalho global: 11 valores. ATENCAO -- esta mesma linha e lida DE
+    # NOVO adiante (linha 786) como o registro do PRIMEIRO sitio, com um
+    # alinhamento de campos diferente: posicao 3 -> latm(1), 4 -> longm(1),
+    # 6 -> vitd_indexm(1). Ou seja o `pindex` daqui E o indice VITD do
+    # primeiro sitio. Nao e defeito, e o formato do arquivo.
+    tok = unit1.read_star(11)
+    icnti = _to_int(tok[0], icnti)                       # numero de linhas
+    state.ncols = _to_int(tok[1], state.ncols)           # numero de colunas
+    state.lat = _to_real(tok[2], state.lat)              # latitude
+    state.mlong = _to_real(tok[3], state.mlong)          # longitude
+    state.elev = _to_real(tok[4], state.elev)            # elevacao (m)
+    pindex = _to_int(tok[5], pindex)                     # ponteiro
+    state.met_count = _to_int(tok[6], state.met_count)   # numero de sitios met
+    state.timeoffset = _to_real(tok[7], state.timeoffset)  # defasagem do zulu
+    state.timstep = _to_real(tok[8], state.timstep)      # passo de tempo do dado
+    state.mflag = _to_real(tok[9], state.mflag)          # sentinela de dado faltante
+    state.iheight = _to_real(tok[10], state.iheight)     # altura da instrumentacao
+
+    state.lat = _anint(state.lat, 10)
+    state.mlong = _anint(state.mlong, 10)
+    state.elev = _anint(state.elev, 10)
+    state.timstep = _anint(state.timstep, 10)
+    state.mflag = _anint(state.mflag, 10)
+
+    if state.iheight < EPS:                              # na pratica: <= 0
+        state.iheight = 2e0
+    state.iheight = _anint(state.iheight, 10)
+
+    # confere se o numero de linhas de met esta correto (linhas 730-754)
+    ntlines = 0
+    header = unit1.read_a()
+    header = unit1.read_a()
+
+    ltest = 0
+    io = 0
+    a = " "          # character(len=512); o original nao inicializa (ver D2)
+
+    while io != -1 and ltest == 0:
+        a, io = unit1.read_a_io(a)
+        i = 1
+        itest = 0
+        while i <= len(a.rstrip()) and itest == 0:
+            if ord(_ch(a, i)) != 32:                     # nao e branco
+                # 45..57 = '-' '.' '/' e os digitos '0'..'9'
+                if 45 <= ord(_ch(a, i)) <= 57:
+                    ntlines = ntlines + 1
+                    itest = 1
+                else:
+                    break                                # `exit` do original
+            i = i + 1
+        if itest == 0:
+            ltest = 1
+
+    # Conta linhas de dados consecutivas ate achar uma linha cujo primeiro
+    # caractere nao-branco nao seja `-./0-9` (ou uma linha em branco, ou o
+    # fim do arquivo). Como o `read` com `iostat` deixa `a` INALTERADA no
+    # EOF, a ultima linha de dados e contada duas vezes -- e e isso que o
+    # `- 1` abaixo compensa. Se o arquivo terminar com uma linha em branco
+    # ou de texto, nao ha duplo, `ntlines` sai igual a `icnti` e a correcao
+    # nao dispara. As linhas 756-758 do original mostram o autor iterando
+    # nessa conta.
+    if icnti != ntlines and ntlines > 1:
+        icnti = ntlines - 1
+    unit1.rewind()
+
+    state.dstart = 0
+    if state.timstep == 3e0 and state.met_count > 1:
+        state.dstart = min(14, icnti)
+    else:
+        state.dstart = 2
+
+    # dimensiona os arrays (linhas 769-771)
+    vitd_indexm = _new_array(state.met_count, 0)
+    latm = _new_array(state.met_count)
+    longm = _new_array(state.met_count)
+    metm = np.zeros((state.met_count + 1, icnti + 1, MAXCOL + 1), dtype=np.float64)
+
+    # zera o array de met -- com o sentinela, nao com 0. O laco triplo do
+    # original cobre i=1..met_count, j=1..icnti, k=1..maxcol; os slots
+    # fantasma ficam em 0.
+    metm[1:, 1:, 1:] = state.mflag
+
+    # le o array de met e a informacao de lat/long/indice (linhas 782-813)
+    i = 1
+    io = 0
+    while io != -1 and i <= state.met_count:
+        # 10 campos; na primeira volta este e o cabecalho global relido
+        tok, io = unit1.read_star_io(10)
+        ijunk = _to_int(tok[0], ijunk)
+        ijunk = _to_int(tok[1], ijunk)
+        latm[i] = _to_real(tok[2], latm[i])
+        longm[i] = _to_real(tok[3], longm[i])
+        junk = _to_real(tok[4], junk)
+        vitd_indexm[i] = _to_int(tok[5], vitd_indexm[i])
+        ijunk = _to_int(tok[6], ijunk)
+        junk = _to_real(tok[7], junk)
+        junk = _to_real(tok[8], junk)
+        junk = _to_real(tok[9], junk)
+        latm[i] = _anint(latm[i], 10)
+        longm[i] = _anint(longm[i], 10)
+
+        header, io = unit1.read_a_io(header)
+        header, io = unit1.read_a_io(header)
+
+        for j in range(1, icnti + 1):
+            # ponytail: laco elemento a elemento em Python, como no
+            # original. Se a leitura de arquivos multiponto grandes ficar
+            # lenta, vetorizar com numpy -- mas o `_anint` tem que continuar
+            # multiplicando por `10**-p`, nao dividindo por `10**p`: os dois
+            # nao dao o mesmo double.
+            if state.ncols > MET_COL:
+                tok, io = unit1.read_star_io(MET_COL + 2)
+                for k in range(1, MET_COL + 1):
+                    metm[i, j, k] = _to_real(tok[k - 1], metm[i, j, k])
+                metm[i, j, 34] = _to_real(tok[MET_COL], metm[i, j, 34])
+                metm[i, j, 35] = _to_real(tok[MET_COL + 1], metm[i, j, 35])
+                # Ponto de atencao 15: le as colunas 1..32, 34 e 35, mas
+                # quantiza 1..34 -- quantiza a 33 (que ninguem leu, ainda
+                # com o sentinela) e NAO quantiza a 35.
+                for k in range(1, MET_COL + 3):
+                    metm[i, j, k] = _anint(metm[i, j, k], 15)
+            else:
+                tok, io = unit1.read_star_io(MET_COL)
+                for k in range(1, MET_COL + 1):
+                    metm[i, j, k] = _to_real(tok[k - 1], metm[i, j, k])
+                for k in range(1, MET_COL + 1):
+                    metm[i, j, k] = _anint(metm[i, j, k], 15)
+
+            # sem precipitacao mensuravel -> tipo de precipitacao = 1
+            if metm[i, j, MetCol.PREC] <= 1e-4:
+                metm[i, j, MetCol.PT] = 1
+            if metm[i, j, MetCol.PREC2] <= 1e-4:
+                metm[i, j, MetCol.PT2] = 1
+
+        i = i + 1
+
+    # Descarta a ultima linha se o ano pular mais de 1 em relacao a
+    # penultima (linha parcial ou lixo no fim do arquivo). Usa `metm(1,...)`
+    # fixo no sitio 1, independente de `met_count`.
+    if icnti > 1:
+        if metm[1, icnti, MetCol.YEAR] - metm[1, icnti - 1, MetCol.YEAR] > 1:
+            icnti = icnti - 1
+
+    state.iend = state.istart + icnti - 1
+    iendi = state.iend
+    unit1.close()                                            # fecha o arquivo met
+
     # ------------------------------------------------------------------
-    # A transcricao para aqui: linha 699 do original (fim do STEP 1).
+    # A transcricao para aqui: linha 822 do original (fim do STEP 2).
     # Falta:
-    #   STEP 2   (702-822)   le o arquivo meteorologico
     #   STEP 3   (825-1153)  abre unidades, hot start, lacunas, aloca
     #   STEP 4   (1156-1425) lacos principais
     #   STEP 6   (1433-1480) fecha arquivos, desaloca, tempo de CPU
     # ------------------------------------------------------------------
+    if _locals is not None:
+        _locals.update(locals())
     unit4.close()
     raise NotImplementedError(
-        "transcricao de fasst_driver.F90 em andamento: parou na linha 534 "
-        "do original (fim do bloco de vegetacao alta)"
+        "transcricao de fasst_driver.F90 em andamento: parou na linha 822 "
+        "do original (fim do STEP 2, leitura do meteorologico)"
     )
 
     et = time.process_time()                                   # call cpu_time(et)
@@ -1392,24 +1622,79 @@ def demo():
     assert MET_COL == 32 and MAXCOL == 35                      # ponto de atencao 8
 
     # ---- STEP 1 ponto unico (linhas 268-386), pelo caminho de main() ----
-    def _run(linhas):
-        """Roda `main` ate onde a transcricao chegou e devolve o estado."""
+    # Uma linha de dados met com as 32 colunas que o original le
+    # (MetCol.YEAR .. MetCol.TSOIL). `hr` e parametrizada so para dar uma
+    # marca distinguivel por linha.
+    def _linha_met(hr, ano=2010, prec=0.0, extra=""):
+        return (
+            "%d 100 %d 0 1013.0 25.0 50.0 3.0 180.0 %s 0 0.0 0 "
+            "0.2 1.0 1 0.0 0.0 0 0.0 0.0 0 "
+            "800.0 600.0 200.0 150.0 350.0 400.0 30.0 180.0 0.0 20.0%s\n"
+            % (ano, hr, prec, extra)
+        )
+
+    def _met(nome="yuma.met", cabecalho=None, corpo=None, cauda=""):
+        """Escreve um arquivo met e devolve o caminho.
+
+        Formato: linha 1 = cabecalho global de 11 campos (que o STEP 2 le
+        DUAS vezes -- ver o comentario na transcricao), linhas 2-3 = texto,
+        depois as linhas de dados.
+        """
+        if cabecalho is None:
+            # icnti ncols lat mlong elev pindex met_count offset timstep mflag iheight
+            cabecalho = "3 32 32.5 -114.0 50.0 1234 1 -7.0 1.0 -999.0 2.0"
+        if corpo is None:
+            corpo = "".join(_linha_met(h) for h in (12, 13, 14))
+        caminho = os.path.join(d, nome)
+        with open(caminho, "w") as f:
+            f.write(cabecalho + "\n")
+            f.write("Year DOY Hr Min AP Tmp RH WS WDir Prec ...\n")
+            f.write("                 mbar  C   %  m/s deg mm/hr\n")
+            f.write(corpo)
+            f.write(cauda)
+        return caminho
+
+    _MET = _met()
+
+    def _run(linhas, met=None):
+        """Roda `main` ate onde a transcricao chegou e devolve (estado, saida)."""
         import contextlib
         import io as _io
         caminho = os.path.join(d, "caso.inp")
         with open(caminho, "w") as f:
-            f.write(linhas)
+            f.write(linhas.replace("@MET@", met if met else _MET))
         st = FasstState()
         saida = _io.StringIO()
         with contextlib.redirect_stdout(saida):
             try:
                 main(["fasst_driver", caminho], _state=st)
             except NotImplementedError:
-                pass                                  # parou na linha 534
+                pass                                  # parou na linha 822
         return st, saida.getvalue()
 
+    def _run_loc(linhas, met=None):
+        """Como `_run`, mas tambem devolve as variaveis LOCAIS de `main`.
+
+        Metade do que o STEP 1 e o STEP 2 produzem (`icnti`, `metm`, `latm`,
+        `output1..5`, `fasstusersoil`, `sname`, `surfdepth`) sao locais do
+        `program`, nao campos de `FasstState` -- sem isto ficariam sem
+        verificacao nenhuma.
+        """
+        import contextlib
+        import io as _io
+        caminho = os.path.join(d, "caso.inp")
+        with open(caminho, "w") as f:
+            f.write(linhas.replace("@MET@", met if met else _MET))
+        st, loc = FasstState(), {}
+        with contextlib.redirect_stdout(_io.StringIO()):
+            try:
+                main(["fasst_driver", caminho], _state=st, _locals=loc)
+            except NotImplementedError:
+                pass
+        return st, loc
+
     _CABECALHO = (
-        "yuma.met                     ! met\n"
+        "@MET@                        ! met\n"
         "0 0 0.5 1                    ! infer_test, single_multi, mgap, keep\n"
         "1.5 0.0 1 1 0 100 0          ! gwl, vegint, nprint..., mstflag\n"
         "1234                         ! vitd_index\n"
@@ -1484,7 +1769,7 @@ def demo():
 
     # infer_test = 1 pula o bloco de neve/gelo e consome a linha de ro1o
     st, _ = _run(
-        "yuma.met    ! met\n"
+        "@MET@    ! met\n"
         "1 0 0.5 1   ! infer_test = 1\n"
         "velho_ro_soil.dat ! ro1o\n"
         "1.5 0.0 1 1 0 100 0\n"
@@ -1499,7 +1784,7 @@ def demo():
         import io as _io
         caminho = os.path.join(d, "ruim.inp")
         with open(caminho, "w") as f:
-            f.write(linhas)
+            f.write(linhas.replace("@MET@", _MET))
         saida = _io.StringIO()
         try:
             with contextlib.redirect_stdout(saida):
@@ -1510,7 +1795,7 @@ def demo():
             return
         raise AssertionError("deveria ter parado: " + trecho)
 
-    _para("m.met !\n2 0 0.5 1 !\n", "infer test flag must be 0 or 1")
+    _para("@MET@ !\n2 0 0.5 1 !\n", "infer test flag must be 0 or 1")
     _para(_CABECALHO + "91.0 0.0\n", "Slope can not be greater than 90")
     _para(_CABECALHO + "0.0 361.0\n", "Aspect can not be greater than +/-360")
     _para(_CABECALHO + "0.0 0.0\n0.01\n2\n", "Open water flag must be 0 or 1")
@@ -1789,11 +2074,11 @@ def demo():
     # estado: aqui so da para provar que os dois registros foram
     # consumidos e que o STEP 1 terminou. Vira verificavel no Dia 7,
     # quando essas unidades forem abertas.
-    st, _ = _run("yuma.met !\n0 1 0.5 1 !\n1.5 0.0 1 1 0 100 0 !\n"
+    st, _ = _run("@MET@ !\n0 1 0.5 1 !\n1.5 0.0 1 1 0 100 0 !\n"
                  "complexo.vitd !\nmeusolo.inp !\n")
     assert st.single_multi_flag == 1 and st.vitd_index == 0
 
-    st, saida = _run("yuma.met !\n0 2 0.5 1 !\n1.5 0.0 1 1 0 100 0 !\n")
+    st, saida = _run("@MET@ !\n0 2 0.5 1 !\n1.5 0.0 1 1 0 100 0 !\n")
     assert "Model does not recognize single_multi_flag input of =   2" in saida
 
     # ---- sort2 (linhas 1483-1534) ----
@@ -1821,6 +2106,208 @@ def demo():
     assert n == 1 and b[1] == 7.0 and b1[1] == 5
     # `b`/`b1` zerados de 1 a maxn antes de tudo (base do ponto 1d)
     assert b[2:] == [0.0] * (MAXN - 1) and b1[2:] == [0] * (MAXN - 1)
+
+    # ---- STEP 2: leitura do arquivo meteorologico (linhas 702-822) ----
+    _LAND = _CABECALHO + _TERRA + "0 ! vegl\n0 ! vegh\n" + _SOLO
+
+    # cabecalho global (717-728)
+    st, loc = _run_loc(_LAND)
+    assert st.ncols == 32
+    assert st.lat == 32.5 and st.mlong == -114.0 and st.elev == 50.0
+    assert st.met_count == 1
+    assert st.timeoffset == -7.0 and st.timstep == 1.0
+    assert st.mflag == -999.0 and st.iheight == 2.0
+    assert loc["pindex"] == 1234
+    assert st.dstart == 2                            # timstep != 3
+    assert loc["icnti"] == 3
+    assert st.iend == st.istart + 3 - 1 == 3
+    assert loc["iendi"] == st.iend
+
+    # A ultima linha de dados e contada DUAS vezes: com `iostat=`, o `read`
+    # no fim do arquivo deixa `a` inalterada e o laco escaneia de novo o
+    # conteudo anterior. Por isso ntlines = icnti + 1, e por isso a linha
+    # 759 faz `ntlines - 1`.
+    assert loc["ntlines"] == 4
+
+    # Com uma linha em branco no fim nao ha duplo: o laco para nela
+    # (len_trim == 0 -> itest == 0), ntlines sai igual a icnti e a correcao
+    # da linha 759 nao dispara.
+    st, loc = _run_loc(_LAND, met=_met("branco.met", cauda="\n"))
+    assert loc["ntlines"] == 3 and loc["icnti"] == 3
+    # uma linha de texto no fim para a contagem do mesmo jeito (primeiro
+    # caractere nao-branco fora da faixa 45..57)
+    st, loc = _run_loc(_LAND, met=_met("texto.met", cauda="FIM DOS DADOS\n"))
+    assert loc["ntlines"] == 3 and loc["icnti"] == 3
+
+    # Cabecalho mentindo sobre o numero de linhas: vale o que foi contado,
+    # menos 1. Aqui ha 5 linhas de dados -> ntlines = 6 -> icnti = 5.
+    st, loc = _run_loc(_LAND, met=_met(
+        "cinco.met",
+        cabecalho="99 32 32.5 -114.0 50.0 1234 1 -7.0 1.0 -999.0 2.0",
+        corpo="".join(_linha_met(h) for h in (12, 13, 14, 15, 16))))
+    assert loc["ntlines"] == 6 and loc["icnti"] == 5 and st.iend == 5
+
+    # `ntlines > 1` na guarda da linha 759: com UMA linha de dados e uma
+    # linha de texto no fim, ntlines sai 1 (nao ha duplo de EOF) e a
+    # correcao NAO dispara -- o `icnti` do cabecalho prevalece, mesmo
+    # estando errado.
+    st, loc = _run_loc(_LAND, met=_met(
+        "uma.met",
+        cabecalho="5 32 32.5 -114.0 50.0 1234 1 -7.0 1.0 -999.0 2.0",
+        corpo=_linha_met(12), cauda="FIM\n"))
+    assert loc["ntlines"] == 1 and loc["icnti"] == 5 and st.iend == 5
+
+    # A faixa 45..57 do scan inclui '-', '.' e '/', nao so os digitos: uma
+    # linha de dados que comeca com `-999` (ano faltante) ainda e contada.
+    st, loc = _run_loc(_LAND, met=_met(
+        "neg.met",
+        cabecalho="99 32 32.5 -114.0 50.0 1234 1 -7.0 1.0 -999.0 2.0",
+        corpo="".join(_linha_met(h, ano=-999) for h in (12, 13, 14))))
+    assert loc["ntlines"] == 4 and loc["icnti"] == 3 and st.iend == 3
+
+    # `iheight` <= 0 cai no padrao de 2 m (linha 727)
+    st, _ = _run_loc(_LAND, met=_met(
+        "alt0.met",
+        cabecalho="3 32 32.5 -114.0 50.0 1234 1 -7.0 1.0 -999.0 0.0"))
+    assert st.iheight == 2.0
+
+    # `dstart` exige as DUAS condicoes: com timstep == 3 mas um unico
+    # sitio, continua 2.
+    st, _ = _run_loc(_LAND, met=_met(
+        "ts3um.met",
+        cabecalho="3 32 32.5 -114.0 50.0 1234 1 -7.0 3.0 -999.0 2.0"))
+    assert st.timstep == 3.0 and st.met_count == 1 and st.dstart == 2
+
+    # `dstart` (762-767): 14 so com timstep == 3 E mais de um sitio.
+    # Aproveita para exercitar dois sitios: o segundo tem registro proprio
+    # de 10 campos, seguido de duas linhas de texto.
+    st, loc = _run_loc(_LAND, met=_met(
+        "ts3.met",
+        cabecalho="3 32 32.5 -114.0 50.0 1234 2 -7.0 3.0 -999.0 2.0",
+        corpo="".join(_linha_met(h) for h in (12, 13, 14))
+              + "0 0 40.0 -80.0 100.0 5678 0 0.0 0.0 0.0\n"
+              + "Year DOY Hr Min ...\n  unidades\n"
+              + "".join(_linha_met(h, ano=2011) for h in (12, 13, 14))))
+    assert st.timstep == 3.0 and st.met_count == 2
+    assert st.dstart == min(14, loc["icnti"])
+    assert loc["latm"][1] == 32.5 and loc["latm"][2] == 40.0
+    assert loc["longm"][1] == -114.0 and loc["longm"][2] == -80.0
+    assert loc["vitd_indexm"][1] == 1234 and loc["vitd_indexm"][2] == 5678
+    assert loc["metm"][2, 1, MetCol.YEAR] == _anint(2011.0, 15)
+
+    # O cabecalho global E o registro do primeiro sitio: `latm(1)`/`longm(1)`
+    # saem das posicoes 3 e 4, e `vitd_indexm(1)` da posicao 6 -- que no
+    # cabecalho e o `pindex`. Nao e defeito, e o formato do arquivo.
+    st, loc = _run_loc(_LAND)
+    assert loc["latm"][1] == st.lat == 32.5
+    assert loc["longm"][1] == st.mlong == -114.0
+    assert loc["vitd_indexm"][1] == loc["pindex"] == 1234
+
+    # conteudo do array de met.
+    # PONTO DE ATENCAO 16: todo valor lido passa por
+    # `anint(x*1d15)*1d-15`, que NAO e identidade. Nem o `1d15` nem o
+    # `1d-15` sao exatos em binario, e para x acima de ~9 o produto `x*1d15`
+    # ja passa de 2^53, onde o espacamento entre doubles e maior que 1 --
+    # entao o caminho de ida e volta perde bits. 7.0 vira 7.000000000000001,
+    # 12.0 vira 12.000000000000002, 1013.0 vira 1013.0000000000001; outros
+    # (0.2, 180.0) sobrevivem por sorte de arredondamento. Nao e erro de
+    # transcricao: e a mesma aritmetica IEEE que o Fortran faz. Por isso os
+    # valores esperados aqui passam pelo mesmo `_anint`.
+    def q(x):
+        return _anint(x, 15)
+
+    assert q(7.0) != 7.0 and q(12.0) != 12.0 and q(1013.0) != 1013.0
+    assert q(0.2) == 0.2 and q(180.0) == 180.0         # nao atinge todos
+
+    metm = loc["metm"]
+    assert metm.shape == (st.met_count + 1, loc["icnti"] + 1, MAXCOL + 1)
+    assert [metm[1, j, MetCol.HR] for j in (1, 2, 3)] == [q(12.0), q(13.0), q(14.0)]
+    assert metm[1, 1, MetCol.TSOL] == q(800.0)
+    assert metm[1, 1, MetCol.TSOIL] == q(20.0)
+    assert metm[1, 1, MetCol.AP] == q(1013.0)
+
+    # PONTO DE ATENCAO 8: a coluna 33 (MetCol.HI) nunca e lida do arquivo
+    # -- `met_col` e 32, MAXCOL e 35 -- e fica com o sentinela. Com
+    # ncols <= 32 as colunas 34 e 35 tambem ficam.
+    assert metm[1, 1, MetCol.HI] == st.mflag == -999.0
+    assert metm[1, 1, MetCol.VIS] == st.mflag
+    assert metm[1, 1, MetCol.AER] == st.mflag
+    # sem precipitacao mensuravel (<= 1e-4) o tipo de precipitacao vira 1
+    assert metm[1, 1, MetCol.PT] == 1 and metm[1, 1, MetCol.PT2] == 1
+
+    # ncols > 32: le 1..32 mais 34 e 35, saltando a 33
+    st, loc = _run_loc(_LAND, met=_met(
+        "c35.met",
+        cabecalho="3 35 32.5 -114.0 50.0 1234 1 -7.0 1.0 -999.0 2.0",
+        corpo="".join(_linha_met(h, extra=" 15.0 7") for h in (12, 13, 14))))
+    metm = loc["metm"]
+    assert st.ncols == 35
+    assert metm[1, 1, MetCol.HR] == q(12.0)
+    # PONTO DE ATENCAO 15: neste ramo o laco de quantizacao vai de 1 a 34,
+    # mas a leitura cobre 1..32 mais 34 e 35. Os dois conjuntos nao batem, e
+    # as duas pontas sao observaveis:
+    #   * a coluna 34 (VIS) e lida E quantizada;
+    #   * a coluna 35 (AER) e lida e NAO quantizada -- fica com o valor cru,
+    #     que e diferente do quantizado (ver ponto 16);
+    #   * a coluna 33 (HI) nao e lida mas E quantizada: o sentinela -999.0
+    #     sai de la como -999.0000000000001, ou seja a coluna 33 deixa de
+    #     ser IGUAL a `mflag`. E por isso que todo teste de dado faltante no
+    #     codigo usa tolerancia -- a linha 1176, por exemplo, faz
+    #     `aint(dabs(met(k,ip_zen)-mflag)*1d5)*1d-5 > eps` -- e nunca
+    #     igualdade.
+    assert metm[1, 1, MetCol.VIS] == q(15.0) != 15.0      # lida e quantizada
+    assert metm[1, 1, MetCol.AER] == 7.0 != q(7.0)        # lida, nao quantizada
+    assert metm[1, 1, MetCol.HI] == q(st.mflag)           # nao lida, quantizada
+    assert metm[1, 1, MetCol.HI] != st.mflag
+    assert abs(metm[1, 1, MetCol.HI] - st.mflag) < 1e-12  # mas passa por tolerancia
+
+    # precipitacao de verdade: o tipo fica como veio do arquivo
+    st, loc = _run_loc(_LAND, met=_met(
+        "chuva.met",
+        corpo="".join(_linha_met(h, prec="2.5") for h in (12, 13, 14))))
+    assert loc["metm"][1, 1, MetCol.PREC] == 2.5
+    assert loc["metm"][1, 1, MetCol.PT] == 0
+    assert loc["metm"][1, 1, MetCol.PT2] == 1        # prec2 continua 0.0
+
+    # O limite e `<=`, nao `<`: prec exatamente 1e-4 AINDA zera o tipo. E o
+    # 1e-4 sobrevive a quantizacao, entao a comparacao e exata.
+    assert q(1e-4) == 1e-4
+    st, loc = _run_loc(_LAND, met=_met(
+        "limite.met",
+        corpo="".join(_linha_met(h, prec="0.0001") for h in (12, 13, 14))))
+    assert loc["metm"][1, 1, MetCol.PREC] == 1e-4
+    assert loc["metm"][1, 1, MetCol.PT] == 1
+
+    # descarte da ultima linha por salto de ano (815-818), sempre olhando
+    # `metm(1,...)` -- sitio 1 fixo, independente de met_count
+    st, loc = _run_loc(_LAND, met=_met(
+        "salto.met",
+        corpo=_linha_met(12) + _linha_met(13) + _linha_met(14, ano=2015)))
+    assert loc["icnti"] == 2 and st.iend == 2
+    # salto de exatamente 1 ano NAO e descartado (`> 1`, nao `>= 1`)
+    st, loc = _run_loc(_LAND, met=_met(
+        "salto1.met",
+        corpo=_linha_met(12) + _linha_met(13) + _linha_met(14, ano=2011)))
+    assert loc["icnti"] == 3 and st.iend == 3
+
+    # met inexistente: ramo de erro do original (divergencia D1)
+    _para(_LAND.replace("@MET@", os.path.join(d, "nao_existe.met")),
+          "Error opening met file")
+
+    # ---- locais do STEP 1 que so agora ficaram verificaveis ----
+    st, loc = _run_loc(_LAND)
+    assert loc["output1"] == "saida.fst" and loc["output5"] == "saida.snw"
+    assert loc["surfdepth"] == 5e-2
+    assert loc["ttest"] == "n" and loc["mtest"] == "n"
+    # ponto de atencao 13 no `fasstusersoil`: sem `!` na linha e sem leitura
+    # (lcount == 0), o strip da linha 629 deixa o nome VAZIO. E a linha 878,
+    # no STEP 3, que o restaura -- ainda nao transcrita.
+    assert loc["lcount"] == 0 and loc["fasstusersoil"] == ""
+    # ramo multiponto: agora da para ver os dois nomes lidos
+    st, loc = _run_loc("@MET@ !\n0 1 0.5 1 !\n1.5 0.0 1 1 0 100 0 !\n"
+                       "complexo.vitd !\nmeusolo.inp !\n")
+    assert loc["vitd_input"] == "complexo.vitd"
+    assert loc["fasstusersoil"] == "meusolo.inp"
 
     print("demo OK")
 
