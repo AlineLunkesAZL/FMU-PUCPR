@@ -131,13 +131,41 @@ transcricao vai QUERER consertar. Cada um leva um comentario no ponto
 correspondente do codigo, conforme for preenchido.
 
 1.  Bloco `nlayers1 > 0` (573-626) -- a regiao mais perigosa do arquivo.
-    A linha 581 testa `soiltype(i-nlayers)` mas a 582 atribui de
-    `soiltype(i-nlayers1)`: variaveis diferentes. `d1`/`d2` ainda valem 0
-    (linha 170) na primeira passagem. A linha 613 avanca `d1` com
-    `lthick3(i)` enquanto ajusta `lthick4`. `sort2` declara saidas
-    `b(maxn)` com entradas `arr(maxn+3)`. Alcancavel so via
-    `vegl_type` 13/14. Transcrever indice por indice, nunca "pelo que faz
-    sentido".
+    Alcancavel so quando a vegetacao baixa deu swamp/bog (13) ou inland
+    water (14), o que preencheu `nlayers1`/`soiltype1`/`lthick1`, E o
+    primeiro ramo (`wflag2 == 1 .and. nlayers <= 1`) nao pegou. Cinco
+    defeitos distintos, todos tracados a mao indice por indice e
+    confirmados contra o codigo (tres casos no `demo()`):
+    a) linhas 581-583 e 603-605 TESTAM `soiltype(i-nlayers)` e ATRIBUEM de
+       `lthick(i-nlayers1)`/`soiltype(i-nlayers1)` -- variaveis
+       diferentes. Com `nlayers == nlayers1` o defeito e invisivel; fora
+       disso o bloco detecta agua numa camada e copia outra. Com
+       `nlayers > nlayers1 + 1` o indice do teste fica NEGATIVO, e com
+       `nlayers == nlayers1 + 1` fica 0 (slot fantasma aqui, memoria antes
+       do array no Fortran).
+    b) `k` sai de `sort2` como a contagem de camadas deduplicadas e e
+       SOBRESCRITO pelo `k = i - j` da linha 598. O valor original se
+       perde, e e a versao nova (`kk - j`) que as linhas 609, 616 e 618
+       usam.
+    c) a linha 613 avanca `d1` com `lthick3(i)` enquanto a 612 ajusta
+       `lthick4(i)` -- o laco analogo de 591-594 usa o mesmo array nas
+       duas linhas.
+    d) o laco final (617-625) le `lthick3`/`soiltype3` ate o `k` NOVO, mas
+       esses arrays so tem entradas validas ate o `k` antigo. As posicoes
+       extras valem 0 -- definidas, nao lixo, porque `sort2` zera `b`/`b1`
+       de 1 a maxn antes de tudo. O `nlayers` resultante tambem pode
+       passar de `maxl`.
+    e) consequencia das anteriores: os VALORES que o `else if` do primeiro
+       laco grava nunca chegam a saida. Quando ele dispara, `j` passa a ser
+       aquele `i`, o `k` final encolhe e o laco 617-625 le so as primeiras
+       `kk-j` posicoes de `lthick3` (as menores, tipicamente as camadas do
+       swamp); e o offset `d2` se cancela em 611-614, porque ali
+       `d1 == d2`. So o TESTE do `else if` tem efeito observavel, pelo `j`
+       que ele move. Verificado por mutacao: trocar o indice das duas
+       atribuicoes nao muda nenhuma saida.
+    Ainda: `sort2` declara as saidas `b(maxn)`/`b1(maxn)` com as entradas
+    `arr(maxn+3)`/`arr1(maxn+3)`. Transcrever indice por indice, nunca
+    "pelo que faz sentido".
 2.  Linha 217 -- tautologia. A condicao do `do while` compara `fp` com o
     mesmo literal duas vezes (`.or.` entre operandos identicos), logo e
     sempre verdadeira: o laco sempre roda ate `dirpos == 1`, o
@@ -203,7 +231,12 @@ correspondente do codigo, conforme for preenchido.
 9.  `tstps == 0` quando `timstep <= 0` (linha 1092): `rtstps` fica 0, logo
     `msteps1 = 0` sempre e nenhuma lacuna e detectada.
 10. Linhas 565-572: `soiltype(2) = soiltype(1)` acontece ANTES de
-    `soiltype(1) = 26`. A ordem e o comportamento.
+    `soiltype(1) = 26`, o que parece dependencia de ordem -- mas NAO e.
+    Para chegar a este ramo e preciso `wflag2 == 1` com `nlayers <= 1`, e
+    `wflag2` so vira 1 quando alguma camada lida tem tipo 26: com uma
+    camada so, essa camada E a de tipo 26, entao `soiltype(2)` recebe 26
+    de qualquer jeito. Mantido na lista porque a leitura inicial sugere o
+    contrario; conferido, nao ha defeito aqui.
 11. Linha 1006: `ro2o = ro1o(1:len_trim(ro1o)-9)//'_time.dat'` assume que o
     nome termina em `_soil.dat` (9 caracteres). Sem validacao no original.
 12. Linhas 1439-1440: `close(11/12, status='delete')` APAGA os arquivos de
@@ -344,6 +377,38 @@ def _to_real(tok, current=0.0):
     if tok is None:
         return current
     return float(tok.replace("d", "e").replace("D", "E"))
+
+
+def _to_char(tok, current=" ", width=1):
+    """Item list-directed de caractere.
+
+    `None` (valor nulo) deixa a variavel INALTERADA. Aspas simples ou
+    duplas em volta sao removidas, e o resultado e truncado no comprimento
+    declarado da variavel Fortran (`character(len=width)`).
+    """
+    if tok is None:
+        return current
+    if len(tok) >= 2 and tok[0] in "'\"" and tok[-1] == tok[0]:
+        tok = tok[1:-1]
+    return tok[:width]
+
+
+def _ix(i):
+    """Indice 1-based calculado exatamente como o original calcula.
+
+    Divergencia deliberada, restrita ao bloco de fusao de camadas (ponto
+    de atencao 1): o indice 0 existe aqui (slot fantasma, valor 0) e e
+    inofensivo, mas um indice NEGATIVO faria o Python pegar o fim do array
+    por wraparound, enquanto o Fortran leria memoria antes do array. Os
+    dois sao lixo; falhar alto e mais util do que produzir numeros
+    plausiveis e diferentes dos do Fortran.
+    """
+    if i < 0:
+        raise IndexError(
+            "indice %d < 0 no bloco de fusao de camadas (ponto de atencao 1): "
+            "com nlayers > nlayers1 + 1, `i - nlayers` fica negativo" % i
+        )
+    return i
 
 
 def _list_items(rec):
@@ -974,12 +1039,201 @@ def main(argv=None, _state=None):
                     if state.vegh_type == 12:                    # ice cap / neve permanente
                         state.veg_flagh = 0
 
+                # ---- tipo de solo, numero de camadas, espessura (536-563) ----
+                tok = unit4.read_star(1)
+                state.nlayers = _to_int(tok[0], state.nlayers)   # numero de camadas (max = 10)
+                for i in range(1, state.nlayers + 1):
+                    tok = unit4.read_star(2)
+                    # tipo da camada, espessura da camada (m)
+                    state.soiltype[i] = _to_int(tok[0], state.soiltype[i])
+                    state.lthick[i] = _to_real(tok[1], state.lthick[i])
+                    if abs(state.soiltype[i]) < 100:             # tipo de solo USCS
+                        state.sclass[i] = "USCS"
+                    elif abs(state.soiltype[i]) >= 100:          # tipo de solo USDA
+                        state.sclass[i] = "USDA"
+                        if state.soiltype[i] > 0:
+                            lis = state.soiltype[i] - 100
+                            state.soiltype[i] = map_usda_soiltype_to_uscs(lis)
+                        else:
+                            state.soiltype[i] = -(abs(state.soiltype[i]) - 100)
+
+                    if state.soiltype[i] == -1:
+                        lcount = i
+                        # `sname` e character(len=4): o Fortran trunca em 4.
+                        # Aqui NAO ha strip de `!` -- ao contrario de todos
+                        # os outros `read(4,'(a)')` deste arquivo.
+                        sname[i] = unit4.read_a()[:4]
+
+                    if state.soiltype[i] == 26:
+                        state.water_flag = 1
+                        wflag2 = 1
+                        wtype = 1
+                        wvel = 0.0
+
+                # ---- fusao de camadas (565-626) ----
+                if wflag2 == 1 and state.nlayers <= 1:
+                    state.nlayers = 3
+                    # `soiltype(2) = soiltype(1)` acontece antes de
+                    # `soiltype(1) = 26`, mas a ordem aqui e indiferente:
+                    # para chegar neste ramo e preciso wflag2 == 1 com
+                    # nlayers <= 1, ou seja a UNICA camada ja e a de tipo 26
+                    # -- ver ponto de atencao 10.
+                    state.soiltype[2] = state.soiltype[1]
+                    state.lthick[2] = state.lthick[1] - 2e-2
+                    state.soiltype[1] = 26
+                    state.lthick[1] = 2e-2
+                    state.soiltype[3] = 7
+                    state.lthick[3] = 1e0
+                elif nlayers1 > 0:
+                    # ==================================================
+                    # PONTO DE ATENCAO 1 -- a regiao mais perigosa do
+                    # arquivo. Alcancavel so quando a vegetacao baixa deu
+                    # swamp/bog (13) ou inland water (14), o que preencheu
+                    # nlayers1/soiltype1/lthick1. Transcrito indice por
+                    # indice. Os quatro defeitos distintos estao marcados
+                    # (1a) a (1d) abaixo.
+                    # ==================================================
+                    kk = 0
+                    kk = nlayers1 + state.nlayers
+                    j = 1
+                    for i in range(1, kk + 1):
+                        if i <= nlayers1 and soiltype1[i] == 26:
+                            lthick2[i] = d1 + lthick1[i]         # d1 ainda e 0
+                            soiltype2[i] = soiltype1[i]
+                        elif i > nlayers1 and state.soiltype[_ix(i - state.nlayers)] == 26:
+                            # (1a) O TESTE acima usa `i - nlayers`; as duas
+                            # atribuicoes abaixo usam `i - nlayers1`. Sao
+                            # variaveis diferentes. Quando nlayers ==
+                            # nlayers1 o defeito e invisivel; fora disso o
+                            # bloco testa uma camada e copia outra.
+                            #
+                            # (1e) Estes dois VALORES, porem, nunca chegam a
+                            # saida -- conferido por mutacao e por traco
+                            # manual. Quando este ramo dispara, `j` passa a
+                            # ser este `i`, logo o `k` final (kk - j) encolhe
+                            # e o laco de 617-625 le so as primeiras kk-j
+                            # posicoes de lthick3, que sao as MENORES
+                            # (tipicamente as camadas do swamp). E o offset
+                            # `d2` se cancela no laco de 611-614, porque ali
+                            # `d1 == d2`. Ou seja: o trabalho deste ramo e
+                            # descartado. So o TESTE tem efeito observavel,
+                            # via o `j` que ele move.
+                            lthick2[i] = d2 + state.lthick[i - nlayers1]
+                            soiltype2[i] = state.soiltype[i - nlayers1]
+                        # Posicoes que nenhum dos dois ramos atingiu ficam
+                        # com o valor anterior (zero aqui, indefinido no
+                        # Fortran) e ainda assim sao lidas nesta linha:
+                        if lthick2[i] > EPS:
+                            j = i
+
+                    k, lthick3, soiltype3 = sort2(j, lthick2, soiltype2)
+
+                    # profundidades acumuladas -> espessuras por camada
+                    d1 = 0
+                    for i in range(1, k + 1):
+                        lthick3[i] = lthick3[i] - d1
+                        d1 = d1 + lthick3[i]
+                    d2 = d1
+
+                    for i in range(1, kk + 1):
+                        # (1b) `k` acabou de sair de sort2 como a contagem de
+                        # camadas deduplicadas e e SOBRESCRITO aqui, dentro
+                        # do laco. O valor original se perde; e esta nova
+                        # versao (no fim, kk - j) que as linhas 609, 616 e
+                        # 618 usam.
+                        k = i - j
+                        if k > 0:
+                            if i <= nlayers1 and soiltype1[i] != 26:
+                                lthick2[k] = d1 + lthick1[i]
+                                soiltype2[k] = soiltype1[i]
+                            elif i > nlayers1 and state.soiltype[_ix(i - state.nlayers)] != 26:
+                                # (1a) de novo: testa `i - nlayers`, copia
+                                # `i - nlayers1`.
+                                lthick2[k] = d2 + state.lthick[i - nlayers1]
+                                soiltype2[k] = state.soiltype[i - nlayers1]
+
+                    jj, lthick4, soiltype4 = sort2(k, lthick2, soiltype2)
+
+                    for i in range(1, jj + 1):
+                        lthick4[i] = lthick4[i] - d1
+                        # (1c) avanca `d1` com `lthick3`, nao com `lthick4`
+                        # -- ao contrario do laco analogo de 591-594, que usa
+                        # o mesmo array nas duas linhas.
+                        d1 = d1 + lthick3[i]
+
+                    state.nlayers = k + jj
+                    for i in range(1, state.nlayers + 1):
+                        # (1d) `lthick3`/`soiltype3` so tem entradas validas
+                        # ate o k ANTIGO (o de sort2), mas sao lidos ate o k
+                        # novo. As posicoes extras valem 0 -- definidas, nao
+                        # lixo, porque sort2 zera `b`/`b1` de 1 a maxn antes
+                        # de qualquer coisa. `nlayers` tambem pode passar de
+                        # maxl aqui: no Fortran isso escreve fora do array,
+                        # em Python levanta IndexError.
+                        if i <= k:
+                            state.lthick[i] = lthick3[i]
+                            state.soiltype[i] = soiltype3[i]
+                        else:
+                            state.lthick[i] = lthick4[i - k]
+                            state.soiltype[i] = soiltype4[i - k]
+
+                if lcount != 0:
+                    fasstusersoil = unit4.read_a()
+                # Ponto de atencao 13: o strip roda SEMPRE, inclusive quando
+                # nada foi lido acima -- e ai o default 'fasstusersoil.inp'
+                # (que nao tem `!`) vira string VAZIA. A linha 878 existe
+                # exatamente para consertar isso.
+                fasstusersoil = _strip_comment(fasstusersoil)
+
+                # ---- temperaturas iniciais de solo (641-654) ----
+                tok = unit4.read_star(1)
+                # "y" = ha temperaturas iniciais de solo, em C
+                ttest = _to_char(tok[0], ttest)
+                if ttest == "y" or ttest == "Y":
+                    tok = unit4.read_star(1)
+                    nt0 = _to_int(tok[0], nt0)               # quantas temperaturas
+                    for j in range(1, nt0 + 1):
+                        tok = unit4.read_star(2)
+                        state.zti[j] = _to_real(tok[0], state.zti[j])  # profundidade (m)
+                        state.tm[j] = _to_real(tok[1], state.tm[j])    # temperatura (C)
+                        if abs(state.tm[j]) > 100.0:
+                            _stop("!!! Measured soil temperatures out of range, "
+                                  "stopping. !!!")
+                        state.tm[j] = state.tm[j] + TREF     # converte para Kelvin
+
+                # ---- umidades iniciais de solo (656-668) ----
+                tok = unit4.read_star(1)
+                # "y" = ha umidades iniciais de solo (fracao)
+                mtest = _to_char(tok[0], mtest)
+                if mtest == "y" or mtest == "Y":
+                    tok = unit4.read_star(1)
+                    # o comentario do original diz "number of initial temps"
+                    # tambem aqui (copia e cola); sao umidades
+                    nm0 = _to_int(tok[0], nm0)
+                    for j in range(1, nm0 + 1):
+                        tok = unit4.read_star(2)
+                        state.zm[j] = _to_real(tok[0], state.zm[j])    # profundidade (m)
+                        state.sm[j] = _to_real(tok[1], state.sm[j])    # umidade (0.0 - 1.0)
+                        if state.sm[j] > 1.0:
+                            _stop("!!! Measured soil moistures out of range, "
+                                  "stopping. !!!")
+
+    elif state.single_multi_flag == 1:                       # calculo multiponto
+        vitd_input = _strip_comment(unit4.read_a())
+        fasstusersoil = _strip_comment(unit4.read_a())
+    else:
+        # Nao ha `stop` aqui: o programa segue para o STEP 2 sem ter lido
+        # nada do arquivo de controle alem do cabecalho.
+        print(" Model does not recognize single_multi_flag input of = %3d"
+              % state.single_multi_flag)
+
+    surfdepth = 5e-2
+
+    unit4.close()                                            # fecha o arquivo de entrada
+
     # ------------------------------------------------------------------
-    # A transcricao para aqui: linha 534 do original (fim do bloco de
-    # vegetacao alta). Falta:
-    #   STEP 1   (536-669)   camadas de solo, USDA->USCS, bloco `nlayers1`
-    #                        e perfil inicial de temperatura/umidade
-    #   STEP 1   (672-696)   ramo multiponto (single_multi_flag == 1)
+    # A transcricao para aqui: linha 699 do original (fim do STEP 1).
+    # Falta:
     #   STEP 2   (702-822)   le o arquivo meteorologico
     #   STEP 3   (825-1153)  abre unidades, hot start, lacunas, aloca
     #   STEP 4   (1156-1425) lacos principais
@@ -994,6 +1248,70 @@ def main(argv=None, _state=None):
     et = time.process_time()                                   # call cpu_time(et)
     print()
     print(" total run time: ", et - it)
+
+
+# ---------------------------------------------------------------------------
+# subroutine sort2 (fasst_driver.F90, linhas 1483-1534)
+# ---------------------------------------------------------------------------
+def sort2(n, arr, arr1):
+    """Ordena os nos em ordem crescente, carregando um array inteiro junto.
+
+    Assinatura original:
+        subroutine sort2(n,arr,arr1,ncount,b,b1)
+          intent(in)    :: n
+          intent(inout) :: arr(maxn+3), arr1(maxn+3)
+          intent(out)   :: ncount, b(maxn), b1(maxn)
+
+    E a versao de `initprofile.sort` (initprofile.py:1116) com um array
+    inteiro paralelo: insertion sort IN-PLACE sobre `arr[1..n]` (e por isso
+    que `arr`/`arr1` sao `intent(inout)` -- o bloco de fusao de camadas usa
+    o array JA ORDENADO depois da chamada), seguido da deduplicacao de
+    valores adjacentes cuja diferenca, escalada por 1000, fique abaixo de
+    1e-4. A comparacao e sempre contra o elemento anterior do array ja
+    ordenado (`arr(j-1)`), nunca contra o ultimo valor mantido em `b`.
+
+    Devolve `(ncount, b, b1)` e modifica `arr`/`arr1` no lugar.
+
+    Dois detalhes do original preservados:
+    * `if(i == 1 .and. arr(i) > a) i = 0` nunca dispara -- se i==1 e
+      arr(i)>a, o `while` anterior ainda estaria rodando. Igual em
+      `initprofile.sort`.
+    * `b`/`b1` sao zerados de 1 a maxn ANTES de tudo. Isso torna DEFINIDA
+      (= 0) a leitura de posicoes nunca preenchidas que o bloco de fusao
+      faz depois -- ver ponto de atencao 1d.
+
+    Oddity do original: as saidas sao declaradas `b(maxn)`/`b1(maxn)`
+    enquanto as entradas sao `arr(maxn+3)`/`arr1(maxn+3)`. Com n > maxn as
+    escritas em `b` estourariam; nao acontece a partir do driver, onde
+    n <= nlayers1 + maxl = 13.
+    """
+    b = _new_array(MAXN)
+    b1 = _new_array(MAXN, 0)
+
+    for j in range(2, n + 1):
+        a = arr[j]
+        nm = arr1[j]
+        i = j - 1
+        while i >= 1 and arr[i] > a:
+            arr[i + 1] = arr[i]
+            arr1[i + 1] = arr1[i]
+            i = i - 1
+        if i == 1 and arr[i] > a:        # nunca dispara; preservado por fidelidade
+            i = 0
+        arr[i + 1] = a
+        arr1[i + 1] = nm
+
+    ncount = 1
+    b[ncount] = arr[1]
+    b1[ncount] = arr1[1]
+    for j in range(2, n + 1):
+        a = arr[j] * 1000.0
+        if abs(a - arr[j - 1] * 1e3) > 1e-4:
+            ncount = ncount + 1
+            b[ncount] = arr[j]
+            b1[ncount] = arr1[j]
+
+    return ncount, b, b1
 
 
 # ---------------------------------------------------------------------------
@@ -1112,6 +1430,10 @@ def demo():
         "0.02                         ! hi\n"
         "0                            ! vegl_type\n"
         "0                            ! vegh_type\n"
+        "1                            ! nlayers\n"
+        "7 1.0                        ! soiltype, lthick\n"
+        "n                            ! ttest\n"
+        "n                            ! mtest\n"
     ))
     assert st.vitd_index == 1234
     assert st.slope_fasst == 30.0 and st.aspect == 180.0
@@ -1119,7 +1441,20 @@ def demo():
     assert st.rough == 0.01
     assert st.water_flag == 0
     assert st.hsaccum == 0.3 and st.iswe == 0.05 and st.hi == 0.02
-    assert st.nlayers == 0                                     # bloco de agua nao rodou
+    # o bloco de agua (linhas 344-365) nao rodou: as camadas vieram do
+    # arquivo, nao do [26, 26, 7] que ele montaria
+    assert st.nlayers == 1 and st.soiltype[1] == 7
+
+    # o limite de 1.57 rad do `dmin1`: 90 graus dao 1.570796... com o PI
+    # truncado do fasst_global, acima do limite, entao o `dmin1` trava em
+    # 1.57. 90 e o maior declive aceito (91 ja para o programa). O valor
+    # final NAO e 1.57 exato: o `anint(x*1d20)*1d-20` da linha 320 perde o
+    # ultimo bit no caminho de volta. Preservado -- e a mesma operacao em
+    # IEEE double que o Fortran faz.
+    st, _ = _run(_CABECALHO + "90.0 0.0\n0.01\n0\n0.0 0.0\n0.0\n0\n0\n"
+                              "1\n7 1.0\nn\nn\n")
+    assert st.slope_fasst == 90.0
+    assert st.sloper == 1.5699999999999998 != 1.57
 
     # agua aberta com profundidade informada (linhas 344-365)
     st, _ = _run(_CABECALHO + (
@@ -1202,7 +1537,16 @@ def demo():
         + "1 2.0 1.0 0.5 0.1 0.1 0.8 0.95   ! camada do dossel\n" * 3
     )
 
-    def _veg(baixa, alta, folhagem=_FOLHAGEM, dossel=_DOSSEL):
+    # bloco de solo minimo: uma camada e nenhum perfil inicial. Necessario
+    # porque a leitura continua para as linhas 536-668 depois da vegetacao.
+    _SOLO = (
+        "1      ! nlayers\n"
+        "7 1.0  ! soiltype, lthick\n"
+        "n      ! ttest\n"
+        "n      ! mtest\n"
+    )
+
+    def _veg(baixa, alta, folhagem=_FOLHAGEM, dossel=_DOSSEL, solo=_SOLO):
         """Monta um caso com `vegl_type` = baixa e `vegh_type` = alta."""
         texto = _CABECALHO + _TERRA + str(baixa) + " ! vegl_type\n"
         if baixa != 0:
@@ -1210,7 +1554,7 @@ def demo():
         texto += str(alta) + " ! vegh_type\n"
         if alta != 0:
             texto += dossel
-        return _run(texto)[0]
+        return _run(texto + solo)[0]
 
     # padrao FASST: passa sem mapeamento, biome_source fica 0
     st = _veg(5, 0)
@@ -1321,6 +1665,162 @@ def demo():
         pass
     else:
         raise AssertionError("esperado IndexError para new_vtl fora da tabela")
+
+    # ---- STEP 1 camadas de solo e perfil inicial (linhas 536-699) ----
+    def _solo(corpo, baixa=0, alta=0):
+        """Caso de terra com o bloco de solo `corpo`."""
+        texto = _CABECALHO + _TERRA + str(baixa) + " ! vegl\n"
+        if baixa:
+            texto += _FOLHAGEM
+        texto += str(alta) + " ! vegh\n"
+        if alta:
+            texto += _DOSSEL
+        return _run(texto + corpo)[0]
+
+    # tipos USCS e USDA (positivo pela tabela, negativo so deslocado)
+    st = _solo("3 !\n7 0.5 !\n103 1.0 !\n-105 2.0 !\nn !\nn !\n")
+    assert st.nlayers == 3
+    assert list(st.soiltype[1:4]) == [7, map_usda_soiltype_to_uscs(3), -5]
+    assert [str(s) for s in st.sclass[1:4]] == ["USCS", "USDA", "USDA"]
+    assert list(st.lthick[1:4]) == [0.5, 1.0, 2.0]
+
+    # soiltype == -1: le uma linha extra com o nome do solo (truncado em 4,
+    # e SEM strip de `!`), e depois lcount != 0 faz ler o fasstusersoil.
+    # Nenhum dos dois e campo de estado -- a prova de que as duas linhas
+    # foram consumidas e que o perfil de temperatura depois delas alinha.
+    st = _solo("1 !\n-1 1.0 !\nMEUSOLO\nmeuarquivo.inp !\ny !\n1 !\n0.5 20.0 !\nn !\n")
+    assert st.zti[1] == 0.5 and abs(st.tm[1] - (20.0 + TREF)) < 1e-12
+
+    # uma camada de tipo 26 liga water_flag/wflag2
+    st = _solo("2 !\n26 1.0 !\n7 2.0 !\nn !\nn !\n")
+    assert st.water_flag == 1 and st.nlayers == 2   # fusao nao roda: nlayers > 1
+
+    # ramo wflag2 (565-572): uma unica camada de agua vira tres
+    st = _solo("1 !\n26 5.0 !\nn !\nn !\n")
+    assert st.nlayers == 3
+    assert list(st.soiltype[1:4]) == [26, 26, 7]
+    assert st.lthick[1] == 2e-2 and abs(st.lthick[2] - 4.98) < 1e-12
+    assert st.lthick[3] == 1.0
+
+    # ===== PONTO DE ATENCAO 1: o bloco de fusao de camadas =====
+    # vegl 1011 -> MODIS 11 -> 13 (swamp/bog) monta nlayers1 = 3,
+    # soiltype1 = [26, 26, 7], lthick1 = [0.02, 1.48, 1.0] (wdepth = 1.5).
+    # O solo do arquivo tem 2 camadas: [26, 1.0] e [7, 2.0].
+    # O resultado abaixo foi tracado a mao, indice por indice, e e LIXO de
+    # proposito -- e o que o Fortran produz:
+    #   * com nlayers(2) != nlayers1(3), o teste `soiltype(i-nlayers)` olha
+    #     a camada errada e a camada de agua do arquivo e tratada como se
+    #     nao fosse agua (1a);
+    #   * sobra uma camada de espessura 0.0 e tipo 0 no meio, vinda de
+    #     posicoes de lthick3/soiltype3 que sort2 zerou e o laco final le
+    #     mesmo assim (1b + 1d).
+    st = _solo("2 !\n26 1.0 !\n7 2.0 !\nn !\nn !\n", baixa=1011)
+    assert st.nlayers == 5
+    assert list(st.soiltype[1:6]) == [26, 26, 0, 7, 7]
+    for i, v in enumerate([0.02, 1.46, 0.0, 1.0, 1.98], start=1):
+        assert abs(st.lthick[i] - v) < 1e-12, (i, st.lthick[i], v)
+
+    # Segundo caso de fusao, tambem tracado a mao: aqui a camada de agua do
+    # arquivo e a SEGUNDA, o que faz o ramo `elif` do primeiro laco ser
+    # realmente tomado -- no caso acima ele nunca e. E a diferenca entre
+    # testar `i - nlayers` e copiar `i - nlayers1` fica visivel nos dois
+    # lacos ao mesmo tempo: em i=4 o bloco detecta agua na camada 2 e copia
+    # a camada 1 (tipo 7, que nao e agua) para a lista de agua; em i=5
+    # detecta "nao-agua" na camada 3 (que nem existe) e copia a camada 2
+    # (tipo 26, agua) para a lista de nao-agua. Resultado: as tres camadas
+    # do swamp desaparecem e sobram uma camada de espessura zero e tipo 0 e
+    # uma de agua de 2 m.
+    st = _solo("2 !\n7 1.0 !\n26 2.0 !\nn !\nn !\n", baixa=1011)
+    assert st.nlayers == 2
+    assert list(st.soiltype[1:3]) == [0, 26]
+    for i, v in enumerate([0.0, 2.0], start=1):
+        assert abs(st.lthick[i] - v) < 1e-12, (i, st.lthick[i], v)
+
+    # Terceiro caso, tambem tracado a mao: nlayers = 4 com nlayers1 = 3 faz
+    # `i - nlayers` valer 0 em i=4, lendo o SLOT FANTASMA `soiltype[0]`. No
+    # Fortran isso le memoria imediatamente antes do array; aqui le um zero
+    # definido, que nao e 26, entao o ramo nao dispara -- o mesmo efeito
+    # pratico, por acidente da convencao de slot fantasma do pacote.
+    st = _solo("4 !\n26 1.0 !\n7 2.0 !\n7 3.0 !\n7 4.0 !\nn !\nn !\n", baixa=1011)
+    assert st.nlayers == 4
+    assert list(st.soiltype[1:5]) == [0, 26, 7, 7]
+    for i, v in enumerate([0.0, 0.02, 3.0, 4.0], start=1):
+        assert abs(st.lthick[i] - v) < 1e-12, (i, st.lthick[i], v)
+
+    # NOTA de verificacao (ponto 1e): as ATRIBUICOES do `elif` do primeiro
+    # laco nao tem teste aqui, e nao e por falta de cenario -- os valores
+    # que elas gravam sao descartados antes de chegar a `state`. Conferido
+    # por mutacao (trocar `i - nlayers1` por `i - nlayers` nas duas linhas
+    # nao muda nenhuma saida) e pelos tres tracos manuais acima. So o
+    # TESTE do `elif` e observavel, pelo `j` que ele move.
+
+    # indice negativo no mesmo bloco: nlayers > nlayers1 + 1 leva
+    # `i - nlayers` abaixo de zero. No Fortran e leitura antes do array;
+    # aqui `_ix` levanta IndexError em vez de dar wraparound silencioso.
+    try:
+        _solo("5 !\n26 1.0 !\n7 1.0 !\n7 1.0 !\n7 1.0 !\n7 1.0 !\nn !\nn !\n",
+              baixa=1011)
+    except IndexError as e:
+        assert "ponto de atencao 1" in str(e)
+    else:
+        raise AssertionError("esperado IndexError com indice negativo na fusao")
+
+    # ---- perfis iniciais de temperatura e umidade (641-668) ----
+    st = _solo("1 !\n7 1.0 !\n"
+               "y !\n2 !\n0.1 10.0 !\n0.5 -5.0 !\n"
+               "y !\n2 !\n0.1 0.3 !\n0.5 0.4 !\n")
+    assert list(st.zti[1:3]) == [0.1, 0.5]
+    assert abs(st.tm[1] - (10.0 + TREF)) < 1e-12        # convertido para Kelvin
+    assert abs(st.tm[2] - (-5.0 + TREF)) < 1e-12
+    assert list(st.zm[1:3]) == [0.1, 0.5]
+    assert list(st.sm[1:3]) == [0.3, 0.4]               # umidade NAO e convertida
+    # "Y" maiusculo tambem vale; qualquer outra coisa pula o bloco
+    st = _solo("1 !\n7 1.0 !\nY !\n1 !\n0.1 10.0 !\nN !\n")
+    assert abs(st.tm[1] - (10.0 + TREF)) < 1e-12 and st.sm[1] == 0.0
+
+    _CAB_TERRA = _CABECALHO + _TERRA + "0 ! vegl\n0 ! vegh\n"
+    _para(_CAB_TERRA + "1 !\n7 1.0 !\ny !\n1 !\n0.1 150.0 !\n",
+          "Measured soil temperatures out of range")
+    _para(_CAB_TERRA + "1 !\n7 1.0 !\nn !\ny !\n1 !\n0.1 1.5 !\n",
+          "Measured soil moistures out of range")
+
+    # ---- ramo multiponto e flag invalido (672-696) ----
+    # `vitd_input`/`fasstusersoil` sao locais de main(), nao campos de
+    # estado: aqui so da para provar que os dois registros foram
+    # consumidos e que o STEP 1 terminou. Vira verificavel no Dia 7,
+    # quando essas unidades forem abertas.
+    st, _ = _run("yuma.met !\n0 1 0.5 1 !\n1.5 0.0 1 1 0 100 0 !\n"
+                 "complexo.vitd !\nmeusolo.inp !\n")
+    assert st.single_multi_flag == 1 and st.vitd_index == 0
+
+    st, saida = _run("yuma.met !\n0 2 0.5 1 !\n1.5 0.0 1 1 0 100 0 !\n")
+    assert "Model does not recognize single_multi_flag input of =   2" in saida
+
+    # ---- sort2 (linhas 1483-1534) ----
+    def _arr(vals, fill=0.0):
+        a = _new_array(MAXN + 3, fill)
+        for i, v in enumerate(vals, start=1):
+            a[i] = v
+        return a
+
+    arr, arr1 = _arr([3.0, 1.0, 3.0, 2.0]), _arr([30, 10, 33, 20], 0)
+    n, b, b1 = sort2(4, arr, arr1)
+    assert n == 3                                        # a duplicata 3.0 sai
+    assert b[1:4] == [1.0, 2.0, 3.0]
+    assert b1[1:4] == [10, 20, 30]
+    assert arr[1:5] == [1.0, 2.0, 3.0, 3.0]              # ordenado IN-PLACE
+    assert arr1[1:5] == [10, 20, 30, 33]                 # inteiros acompanham
+    # limiar de deduplicacao: |a - anterior| * 1000 > 1e-4, ou seja 1e-7 na
+    # escala original. Os tres casos cercam o limiar de perto o suficiente
+    # para que mexer no 1e-4 mude o resultado.
+    assert sort2(2, _arr([1.0, 1.00000005]), _arr([1, 2], 0))[0] == 1   # 5e-5
+    assert sort2(2, _arr([1.0, 1.000001]), _arr([1, 2], 0))[0] == 2     # 1e-3
+    assert sort2(2, _arr([1.0, 1.001]), _arr([1, 2], 0))[0] == 2        # 1e0
+    # n <= 1: nenhum laco roda, mas ncount = 1 com arr(1) mesmo assim
+    n, b, b1 = sort2(1, _arr([7.0]), _arr([5], 0))
+    assert n == 1 and b[1] == 7.0 and b1[1] == 5
+    # `b`/`b1` zerados de 1 a maxn antes de tudo (base do ponto 1d)
+    assert b[2:] == [0.0] * (MAXN - 1) and b1[2:] == [0] * (MAXN - 1)
 
     print("demo OK")
 
