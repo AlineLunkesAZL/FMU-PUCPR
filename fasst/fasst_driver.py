@@ -116,6 +116,12 @@ Divergencias deliberadas
   compilador, e na pratica muitos zeram. Aqui sao zeros explicitos. Isso
   importa no ponto de atencao 1, onde o bloco `nlayers1` LE posicoes que
   nunca foram atribuidas.
+* `modis_type(new_vtl)` / `umd_type(new_vth)` (linhas 404, 411, 483, 485)
+  nao tem checagem de limite. Os arrays tem 20 e 14 posicoes, mas
+  `new_vtl`/`new_vth` podem chegar a 999 (ex. `vegl_type = 1025` ou
+  `2999`). Em Fortran isso le memoria fora do array em silencio; aqui
+  levanta `IndexError`. Falhar alto e melhor que propagar lixo, e segue o
+  precedente de `map_usda_soiltype_to_uscs`.
 
 Pontos de atencao
 -------------------
@@ -140,10 +146,45 @@ correspondente do codigo, conforme for preenchido.
 3.  Linhas 492-512 -- ramo morto. `vegh_type` e zerado na linha 494 e so
     entao testado (`if(vegh_type == 14)`, linha 497): o ramo "inland
     water" nunca executa, sempre cai em "ocean" (`water_flag = 3`), e as
-    linhas 510-511 sobrescrevem `wdepth = 3`/`wvel = 0` nos dois casos.
-4.  Assimetria `new_vtl` vs `new_vth`. Linha 399:
-    `new_vtl = vegl_type - biome_source`. Linha 479:
-    `new_vth = max(0, vegh_type - biome_source)`. So um tem o `max`.
+    linhas 510-511 sobrescrevem `wdepth = 3`/`wvel = 0` nos dois casos --
+    o que anularia o `wdepth = 10` mesmo se o ramo fosse alcancavel. O
+    bloco equivalente da vegetacao baixa (422-452) NAO tem esse defeito:
+    la `vegl_type` e testado antes de ser zerado, e os tres ramos
+    (swamp/bog, inland water, ocean) funcionam. Entradas que alcancam
+    cada um: MODIS 11 -> 13, MODIS 17 -> 14, UMD 14 -> 15.
+4.  Assimetrias entre o bloco de vegetacao baixa (391-467) e o de alta
+    (471-534), que no mais sao quase identicos:
+    a) linha 399 `new_vtl = vegl_type - biome_source` NAO tem o `max(0,.)`
+       que a linha 479 tem para `new_vth`;
+    b) a vegetacao baixa exclui explicitamente os tipos MODIS 13 e 16
+       (linha 403) e UMD 13 (linha 410), zerando `veg_flagl` junto; a
+       vegetacao alta nao exclui nada (linha 483), entao MODIS 13 ->
+       `vegh_type = 0` COM `veg_flagh` continuando 1 -- um estado que o
+       lado da vegetacao baixa nunca produz.
+14. `biome_source`, `new_vtl` e `new_vth` sao campos de estado que NINGUEM
+    rezera: nao estao em `zero_parameters` (conferido em
+    `fasst/zerovars.py`), e as linhas 394-398 / 474-478 so os ESCREVEM
+    quando o tipo lido e >= 1000. O valor vaza em dois niveis:
+    a) da vegetacao baixa para a alta, dentro do mesmo ponto. Um arquivo
+       com baixa MODIS/UMD (ex. 1003) e alta no padrao FASST (ex. 5)
+       deixa `biome_source = 1000` valendo para a alta, fazendo
+       `new_vth = max(0, 5 - 1000) = 0`, e a vegetacao alta e descartada
+       em silencio (`vegh_type = 0`, `veg_flagh = 0`) -- embora os 4
+       registros do dossel continuem sendo consumidos do arquivo. Na
+       ordem inversa nao acontece, porque a baixa e lida primeiro.
+    b) de um ponto de grade para o SEGUINTE, no modo multiponto. O STEP 0
+       (linhas 147-149) zera os tres UMA vez, no inicio do programa; o
+       laco da linha 1289 chama `zero_parameters` por registro VITD, e ela
+       nao toca neles. Um ponto com vegetacao MODIS contamina todos os
+       pontos seguintes que usem o padrao FASST, perdendo tanto a
+       vegetacao baixa quanto a alta.
+    E so por (b) que o ponto 4a tem efeito observavel: como desvio,
+    `max(0,x) > 0` e `x > 0` sao equivalentes. O que o `max` muda e o
+    VALOR guardado em `new_vtl`/`new_vth`, que `initsurface.py:269,272`
+    repassa a `veg_propl`/`veg_proph`: sem o `max`, `new_vtl` chega la
+    negativo. Como o STEP 0 zera `biome_source` no inicio, (b) e o 4a so
+    sao demonstraveis a partir da SEGUNDA iteracao do laco multiponto --
+    a checagem dos dois fica para o Dia 9, quando esse laco existir.
 5.  Vazamento do `i` (1063 + 1095-1099). Depois de `i = i - 1`, o laco de
     contagem de lacunas indexa `metm(i,k,...)`. No ramo ponto-unico `i` e o
     sitio casado; no multiponto e um contador de linhas da unidade 5, sem
@@ -741,11 +782,203 @@ def main(argv=None, _state=None):
             if state.hi < 0.0:
                 _stop("!!! Initial ice thickness can not be less than 0, stopping. !!!")
 
+            # ---- vegetacao e camadas de solo (linhas 388-669) ----
+            # Note a aninhagem: todo este bloco esta DENTRO de
+            # `infer_test == 0`. Numa execucao de hot start (infer_test==1)
+            # nada disso e lido -- o perfil vem do arquivo da execucao
+            # anterior.
+            if state.water_flag == 0:
+                tok = unit4.read_star(1)
+                # tipo de vegetacao baixa na superficie
+                state.vegl_type = _to_int(tok[0], state.vegl_type)
+
+                if state.vegl_type != 0:
+                    state.veg_flagl = 1
+
+                    if 1000 <= state.vegl_type < 2000:
+                        state.biome_source = 1000                # MODIS/IGBP
+                    elif 2000 <= state.vegl_type < 3000:
+                        state.biome_source = 2000                # UMD/LDAS
+                    # Ponto de atencao 4a: aqui NAO ha `max(0,...)` -- a
+                    # linha 479, do lado da vegetacao alta, tem.
+                    state.new_vtl = state.vegl_type - state.biome_source
+
+                    if state.new_vtl > 0:
+                        if state.biome_source == 1000:           # MODIS
+                            # Ponto de atencao 4b: os tipos 13 e 16 sao
+                            # excluidos aqui; do lado da vegetacao alta nao
+                            # ha exclusao nenhuma.
+                            if state.new_vtl != 13 and state.new_vtl != 16:
+                                state.vegl_type = _MODIS_TYPE[state.new_vtl]
+                            else:
+                                state.vegl_type = 0
+                                state.veg_flagl = 0
+                        elif state.biome_source == 2000:         # UMD
+                            if state.new_vtl != 13:
+                                state.vegl_type = _UMD_TYPE[state.new_vtl]
+                            else:
+                                state.vegl_type = 0
+                                state.veg_flagl = 0
+                        # Com `biome_source == 0` (padrao FASST) nenhum dos
+                        # dois ramos roda e `vegl_type` segue com o valor
+                        # lido do arquivo.
+                    else:
+                        state.vegl_type = 0
+                        state.veg_flagl = 0
+
+                    # Ao contrario do bloco equivalente da vegetacao alta
+                    # (ponto de atencao 3), aqui `vegl_type` e testado ANTES
+                    # de ser zerado, e os tres ramos funcionam.
+                    if 13 <= state.vegl_type <= 15:
+                        wtype = 1
+                        wvel = 0.0
+                        if state.vegl_type == 13:                # swamp/bog
+                            state.water_flag = 1
+                            wdepth = 1.5
+                            nlayers1 = 3
+                            soiltype1[1] = 26
+                            lthick1[1] = 2e-2
+                            soiltype1[2] = 26
+                            lthick1[2] = wdepth - lthick1[1]
+                            soiltype1[3] = 7
+                            lthick1[3] = 1e0
+                        elif state.vegl_type == 14:              # inland water
+                            state.water_flag = 1
+                            state.veg_flagl = 0
+                            state.vegl_type = 0
+                            wdepth = 10e0
+                            nlayers1 = 3
+                            soiltype1[1] = 26
+                            lthick1[1] = 2e-2
+                            soiltype1[2] = 26
+                            lthick1[2] = wdepth - lthick1[1]
+                            soiltype1[3] = 7
+                            lthick1[3] = 1e0
+                        else:                                    # ocean
+                            state.water_flag = 3
+                            state.vegl_type = 0
+                            state.veg_flagl = 0
+                            # `wdepth` NAO e tocado neste ramo: segue com o
+                            # sentinela SPFLAG, porque o bloco de agua da
+                            # linha 344 nao rodou (water_flag era 0). Isso
+                            # chega ao bloco de fusao de camadas (ponto 1).
+
+                    tok = unit4.read_star(1)
+                    # densidade inicial de folhagem; limitada a 0.98, exceto
+                    # se for o sentinela SPFLAG (que e > 0.98) -- mesmo
+                    # idioma do `wdepth` na linha 354
+                    state.isigfl = _to_real(tok[0], state.isigfl)
+                    if state.isigfl > 0.98 and abs(_aint(state.isigfl - SPFLAG, 5)) > EPS:
+                        state.isigfl = 0.98
+                    tok = unit4.read_star(1)
+                    state.iepf = _to_real(tok[0], state.iepf)    # emissividade inicial
+                    tok = unit4.read_star(1)
+                    state.ifola = _to_real(tok[0], state.ifola)  # absortividade (1 - albedo)
+                    tok = unit4.read_star(1)
+                    state.ihfol = _to_real(tok[0], state.ihfol)  # altura inicial (cm)
+
+                    if abs(state.isigfl) <= EPS:
+                        state.vegl_type = 0
+                        state.veg_flagl = 0
+
+                    if state.vegl_type == 12:                    # ice cap / neve permanente
+                        state.veg_flagl = 0
+
+                tok = unit4.read_star(1)
+                # tipo de vegetacao alta (arvores)
+                state.vegh_type = _to_int(tok[0], state.vegh_type)
+
+                if state.vegh_type != 0:
+                    state.veg_flagh = 1
+
+                    if 1000 <= state.vegh_type < 2000:
+                        state.biome_source = 1000
+                    elif 2000 <= state.vegh_type < 3000:
+                        state.biome_source = 2000
+                    # Ponto de atencao 4a: COM `max(0,...)`, ao contrario da
+                    # linha 399. Ponto de atencao 14: `biome_source` nao foi
+                    # rezerado depois da vegetacao baixa, entao um arquivo
+                    # com baixa MODIS/UMD e alta no padrao FASST cai aqui em
+                    # `max(0, negativo) = 0` e perde a vegetacao alta.
+                    state.new_vth = max(0, state.vegh_type - state.biome_source)
+
+                    if state.new_vth > 0:
+                        # Ponto de atencao 4b: sem a exclusao de 13/16 que a
+                        # vegetacao baixa tem. MODIS 13 da `vegh_type = 0`
+                        # com `veg_flagh` continuando 1.
+                        if state.biome_source == 1000:
+                            state.vegh_type = _MODIS_TYPE[state.new_vth]
+                        elif state.biome_source == 2000:
+                            state.vegh_type = _UMD_TYPE[state.new_vth]
+                    else:
+                        state.vegh_type = 0
+                        state.veg_flagh = 0
+
+                    # Ponto de atencao 3 -- ramo morto. `vegh_type` e zerado
+                    # duas linhas abaixo e SO ENTAO testado contra 14, entao
+                    # o ramo "inland water" nunca executa: cai sempre no
+                    # `else` (ocean). E as duas ultimas atribuicoes
+                    # sobrescrevem `wdepth`/`wvel` nos dois casos, anulando
+                    # o `wdepth = 10` mesmo se o ramo fosse alcancavel.
+                    if state.vegh_type == 14 or state.vegh_type == 15:  # inland water, ocean
+                        wtype = 1
+                        state.vegh_type = 0
+                        state.veg_flagh = 0
+
+                        if state.vegh_type == 14:                # inalcancavel
+                            state.water_flag = 1
+                            wdepth = 10e0
+                            nlayers1 = 3
+                            soiltype1[1] = 26
+                            lthick1[1] = 2e-2
+                            soiltype1[2] = 26
+                            lthick1[2] = wdepth - lthick1[1]
+                            soiltype1[3] = 7
+                            lthick1[3] = 1e0
+                        else:                                    # ocean (sempre)
+                            state.water_flag = 3
+                        wdepth = 3e0
+                        wvel = 0e0
+
+                    tok = unit4.read_star(2)
+                    state.izh = _to_real(tok[0], state.izh)      # altura do dossel (m)
+                    state.isigfh = _to_real(tok[1], state.isigfh)  # densidade do dossel (0 - 1)
+
+                    if state.isigfh > 0.98 and abs(_aint(state.isigfh - SPFLAG, 5)) > EPS:
+                        state.isigfh = 0.98
+
+                    # para cada camada: indice de area foliar, fator de
+                    # agrupamento de Markov ("Markox" no original,
+                    # tipicamente 1.0), espessura, reflectancia,
+                    # transmissao, absorcao de onda curta (1 - albedo),
+                    # emissividade de onda longa
+                    for j in range(1, NCLAYERS + 1):
+                        tok = unit4.read_star(8)
+                        state.ifoliage_type[j] = _to_real(tok[0], state.ifoliage_type[j])
+                        state.ilai[j] = _to_real(tok[1], state.ilai[j])
+                        state.iclump[j] = _to_real(tok[2], state.iclump[j])
+                        state.idzveg[j] = _to_real(tok[3], state.idzveg[j])
+                        state.irho[j] = _to_real(tok[4], state.irho[j])
+                        state.itau[j] = _to_real(tok[5], state.itau[j])
+                        state.ialp[j] = _to_real(tok[6], state.ialp[j])
+                        state.ieps[j] = _to_real(tok[7], state.ieps[j])
+                        if abs(state.ilai[j]) <= EPS:
+                            state.ilai[j] = 0.5
+                        if abs(state.iclump[j]) <= EPS:
+                            state.iclump[j] = 1e-2
+
+                    if abs(state.isigfh) <= EPS:
+                        state.vegh_type = 0
+                        state.veg_flagh = 0
+
+                    if state.vegh_type == 12:                    # ice cap / neve permanente
+                        state.veg_flagh = 0
+
     # ------------------------------------------------------------------
-    # A transcricao para aqui: linha 386 do original (fim do bloco de neve
-    # e gelo iniciais). Falta:
-    #   STEP 1   (388-670)   vegetacao baixa/alta, camadas de solo, perfil
-    #                        inicial de temperatura e umidade
+    # A transcricao para aqui: linha 534 do original (fim do bloco de
+    # vegetacao alta). Falta:
+    #   STEP 1   (536-669)   camadas de solo, USDA->USCS, bloco `nlayers1`
+    #                        e perfil inicial de temperatura/umidade
     #   STEP 1   (672-696)   ramo multiponto (single_multi_flag == 1)
     #   STEP 2   (702-822)   le o arquivo meteorologico
     #   STEP 3   (825-1153)  abre unidades, hot start, lacunas, aloca
@@ -754,8 +987,8 @@ def main(argv=None, _state=None):
     # ------------------------------------------------------------------
     unit4.close()
     raise NotImplementedError(
-        "transcricao de fasst_driver.F90 em andamento: parou na linha 386 "
-        "do original (neve e gelo iniciais, ramo de ponto unico)"
+        "transcricao de fasst_driver.F90 em andamento: parou na linha 534 "
+        "do original (fim do bloco de vegetacao alta)"
     )
 
     et = time.process_time()                                   # call cpu_time(et)
@@ -854,7 +1087,7 @@ def demo():
             try:
                 main(["fasst_driver", caminho], _state=st)
             except NotImplementedError:
-                pass                                  # parou na linha 386
+                pass                                  # parou na linha 534
         return st, saida.getvalue()
 
     _CABECALHO = (
@@ -869,13 +1102,16 @@ def demo():
         "saida.snw                    ! output5\n"
     )
 
-    # terra (water_flag = 0)
+    # terra (water_flag = 0). Note as duas ultimas linhas: com water_flag
+    # = 0 a leitura CONTINUA no bloco de vegetacao (linhas 388-534).
     st, _ = _run(_CABECALHO + (
         "30.0 180.0                   ! slope, aspect\n"
         "0.01                         ! rough\n"
         "0                            ! water_flag\n"
         "0.3 0.05                     ! hsaccum, iswe\n"
         "0.02                         ! hi\n"
+        "0                            ! vegl_type\n"
+        "0                            ! vegh_type\n"
     ))
     assert st.vitd_index == 1234
     assert st.slope_fasst == 30.0 and st.aspect == 180.0
@@ -946,6 +1182,145 @@ def demo():
     _para(_CABECALHO + "0.0 0.0\n0.01\n0\n-1.0 0.0\n", "snow depth can not be less than 0")
     _para(_CABECALHO + "0.0 0.0\n0.01\n0\n0.0 -1.0\n", "snow water equivalent can not")
     _para(_CABECALHO + "0.0 0.0\n0.01\n0\n0.0 0.0\n-1.0\n", "ice thickness can not be less")
+
+    # ---- STEP 1 vegetacao (linhas 388-534) ----
+    _TERRA = (
+        "0.0 0.0                      ! slope, aspect\n"
+        "0.01                         ! rough\n"
+        "0                            ! water_flag\n"
+        "0.0 0.0                      ! hsaccum, iswe\n"
+        "0.0                          ! hi\n"
+    )
+    _FOLHAGEM = (
+        "0.5    ! isigfl\n"
+        "0.95   ! iepf\n"
+        "0.8    ! ifola\n"
+        "10.0   ! ihfol\n"
+    )
+    _DOSSEL = (
+        "2.0 0.9   ! izh, isigfh\n"
+        + "1 2.0 1.0 0.5 0.1 0.1 0.8 0.95   ! camada do dossel\n" * 3
+    )
+
+    def _veg(baixa, alta, folhagem=_FOLHAGEM, dossel=_DOSSEL):
+        """Monta um caso com `vegl_type` = baixa e `vegh_type` = alta."""
+        texto = _CABECALHO + _TERRA + str(baixa) + " ! vegl_type\n"
+        if baixa != 0:
+            texto += folhagem
+        texto += str(alta) + " ! vegh_type\n"
+        if alta != 0:
+            texto += dossel
+        return _run(texto)[0]
+
+    # padrao FASST: passa sem mapeamento, biome_source fica 0
+    st = _veg(5, 0)
+    assert st.vegl_type == 5 and st.veg_flagl == 1 and st.biome_source == 0
+    assert st.isigfl == 0.5 and st.iepf == 0.95 and st.ifola == 0.8 and st.ihfol == 10.0
+
+    # MODIS/IGBP e UMD/LDAS
+    st = _veg(1003, 0)
+    assert st.vegl_type == _MODIS_TYPE[3] == 4
+    assert st.biome_source == 1000
+    # `new_vtl` nao e so uma variavel de desvio: initsurface.py:269 o
+    # repassa a `veg_propl`, entao o valor guardado importa (ponto 4a)
+    assert st.new_vtl == 3
+    st = _veg(2001, 0)
+    assert st.vegl_type == _UMD_TYPE[1] == 3
+    assert st.biome_source == 2000 and st.new_vtl == 1
+    # ponto 4b: a vegetacao baixa exclui MODIS 13/16 e UMD 13
+    for entrada in (1013, 1016, 2013):
+        st = _veg(entrada, 0)
+        assert st.vegl_type == 0 and st.veg_flagl == 0, entrada
+
+    # os tres ramos de agua da vegetacao baixa funcionam (ao contrario do
+    # equivalente da vegetacao alta -- ponto de atencao 3)
+    st = _veg(1011, 0)                                   # MODIS 11 -> 13 swamp/bog
+    assert st.water_flag == 1 and st.vegl_type == 13 and st.veg_flagl == 1
+    st = _veg(1017, 0)                                   # MODIS 17 -> 14 inland water
+    assert st.water_flag == 1 and st.vegl_type == 0 and st.veg_flagl == 0
+    st = _veg(2014, 0)                                   # UMD 14 -> 15 ocean
+    assert st.water_flag == 3 and st.vegl_type == 0 and st.veg_flagl == 0
+
+    assert _veg(1015, 0).veg_flagl == 0                  # MODIS 15 -> 12 ice cap
+    assert _veg(1015, 0).vegl_type == 12                 # ...mas o tipo fica
+
+    # limite de 0.98 na densidade de folhagem, e o sentinela que escapa dele
+    assert _veg(5, 0, folhagem="0.99 !\n0.9 !\n0.8 !\n1.0 !\n").isigfl == 0.98
+    assert _veg(5, 0, folhagem=", !\n0.9 !\n0.8 !\n1.0 !\n").isigfl == SPFLAG
+    # isigfl = 0 desliga a vegetacao baixa depois de ja ter sido mapeada
+    st = _veg(5, 0, folhagem="0.0 !\n0.9 !\n0.8 !\n1.0 !\n")
+    assert st.vegl_type == 0 and st.veg_flagl == 0
+
+    # ---- vegetacao alta ----
+    st = _veg(0, 7)
+    assert st.vegh_type == 7 and st.veg_flagh == 1
+    assert st.izh == 2.0 and st.isigfh == 0.9
+    assert list(st.ilai[1:4]) == [2.0, 2.0, 2.0]
+    assert list(st.ieps[1:4]) == [0.95, 0.95, 0.95]
+
+    # os limites de ilai e iclump quando vem zero
+    st = _veg(0, 7, dossel="2.0 0.9 !\n" + "1 0.0 0.0 0.5 0.1 0.1 0.8 0.95 !\n" * 3)
+    assert list(st.ilai[1:4]) == [0.5, 0.5, 0.5]
+    assert list(st.iclump[1:4]) == [1e-2, 1e-2, 1e-2]
+
+    # PONTO DE ATENCAO 3 -- ramo morto: MODIS 17 -> 14 ("inland water")
+    # NAO produz water_flag = 1; cai no `else` do ocean e termina com
+    # water_flag = 3. E o `wdepth = 10` do ramo morto seria sobrescrito
+    # por 3 de qualquer forma.
+    st = _veg(0, 1017)
+    assert st.water_flag == 3, "ponto 3: o ramo inland water deveria estar morto"
+    assert st.vegh_type == 0 and st.veg_flagh == 0
+    st = _veg(0, 2014)                                   # UMD 14 -> 15 ocean
+    assert st.water_flag == 3 and st.vegh_type == 0 and st.veg_flagh == 0
+
+    # PONTO DE ATENCAO 4b: sem exclusao de 13/16 do lado da vegetacao alta.
+    # MODIS 13 -> 0, mas veg_flagh CONTINUA 1 -- estado que o lado da
+    # vegetacao baixa nunca produz.
+    st = _veg(0, 1013)
+    assert st.vegh_type == _MODIS_TYPE[13] == 0
+    assert st.veg_flagh == 1, "ponto 4b: veg_flagh nao e zerado aqui"
+    # O 16 e o caso que distingue de verdade os dois lados: a vegetacao
+    # baixa zera (testado acima, com 1016), a alta MAPEIA para 8.
+    st = _veg(0, 1016)
+    assert st.vegh_type == _MODIS_TYPE[16] == 8, "ponto 4b: a alta nao exclui o 16"
+    assert st.veg_flagh == 1
+
+    # PONTO DE ATENCAO 14: `biome_source` vaza da vegetacao baixa para a
+    # alta. Baixa MODIS (1003) + alta no padrao FASST (5) ->
+    # max(0, 5 - 1000) = 0 -> a vegetacao alta e descartada em silencio.
+    st = _veg(1003, 5)
+    assert st.vegl_type == 4 and st.veg_flagl == 1
+    assert st.biome_source == 1000
+    assert st.new_vth == 0
+    assert st.vegh_type == 0 and st.veg_flagh == 0, "ponto 14: alta descartada"
+    # ...mas os 4 registros do dossel continuam sendo CONSUMIDOS do
+    # arquivo: o `if(vegh_type /= 0)` da linha 471 foi avaliado com o valor
+    # original, e so o conteudo interno zerou o tipo. Quem monta o .inp
+    # ainda precisa fornece-los, e os valores vao parar em ilai/ieps.
+    assert list(st.ilai[1:4]) == [2.0, 2.0, 2.0]
+    assert st.izh == 2.0
+    # na ordem inversa nao acontece: a baixa e processada primeiro
+    st = _veg(5, 1003)
+    assert st.vegl_type == 5 and st.vegh_type == _MODIS_TYPE[3] == 4
+    assert st.veg_flagh == 1
+
+    assert _veg(2000, 0).vegl_type == 0                  # new_vtl = 0 -> ramo `else`
+
+    # SEM CHECAGEM AINDA: os pontos de atencao 4a e 14b. O STEP 0 zera
+    # `biome_source` no inicio do programa, entao um `biome_source` herdado
+    # so aparece a partir da SEGUNDA iteracao do laco multiponto -- que so
+    # existe no Dia 9. Nao da para demonstrar nenhum dos dois aqui sem
+    # simular um caminho que o codigo ainda nao tem, e um teste assim
+    # passaria sem provar nada.
+
+    # divergencia documentada: indice fora da tabela levanta IndexError
+    # (no Fortran seria leitura de memoria fora do array)
+    try:
+        _veg(1025, 0)                                    # new_vtl = 25 > 20
+    except IndexError:
+        pass
+    else:
+        raise AssertionError("esperado IndexError para new_vtl fora da tabela")
 
     print("demo OK")
 
