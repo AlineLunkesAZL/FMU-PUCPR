@@ -288,6 +288,17 @@ Pendencias
   leitores e trabalho de `fasst_main`.
 * `makemtagroundout` / `makemtafasstout` (1428-1430) estao comentadas no
   proprio Fortran. Nao transcrever.
+* VALOR FINAL DE VARIAVEL DE LACO -- conferir em cada dia que falta. Um
+  `do i=1,n` do Fortran termina com `i == n+1` (ou com o valor inicial, se
+  o laco nao rodar nenhuma vez); um `for i in range(1, n+1)` do Python
+  termina com `i == n`. Qualquer leitura de `i`/`j`/`k`/`kk` DEPOIS de um
+  laco difere em 1 entre as duas linguagens. Auditado nas linhas 109-822:
+  nenhum `for` transcrito ate agora tem a variavel lida depois do laco, e
+  os pontos onde o original depende disso (o laco de sitios do STEP 2, o
+  `i = i - 1` da linha 1063) sao `do while` com incremento explicito nos
+  dois lados, entao sao fieis. O ponto de atencao 5 fica justamente nessa
+  fronteira: o STEP 3 (Dia 8) le `i` depois do laco e precisa de conferencia
+  linha a linha.
 """
 
 import math
