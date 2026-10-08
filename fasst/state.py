@@ -310,6 +310,36 @@ class FasstState:
     tot_thick: Optional[np.ndarray] = None
     sstate: Optional[np.ndarray] = None          # character(len=1), allocatable
 
+    # -- unidades logicas de arquivo (fasst_driver.F90 STEP 1/2/3) ----------
+    # O Fortran identifica arquivos abertos por NUMERO de unidade, que e
+    # global ao programa; aqui cada um vira um campo com o handle aberto.
+    # Quem abre e fecha e sempre o driver (`fasst_driver.main`); os demais
+    # modulos apenas usam. `initsurface.py:56-60` ja assumia estes nomes
+    # (`state.unit3`, `unit10`, `unit31/32/33`, `unit55`, `unit90`).
+    #
+    # Os nomes estao em `_ALLOCATABLE_FIELDS` -- nao porque sejam
+    # alocaveis, mas porque essa tupla e de fato "campos que `reset()` nao
+    # mexe". Um handle aberto NAO pode ser zerado entre pontos de grade: o
+    # Fortran abre estas unidades uma unica vez no STEP 3 e chama
+    # `zero_parameters` por registro VITD (fasst_driver.F90:1289), bem
+    # depois. Zerar aqui faria o segundo ponto escrever em `None`.
+    unit2: Optional[object] = None    # output1 -- met e dados de superficie
+    unit3: Optional[object] = None    # output2 -- perfil vertical (nprint == 1)
+    unit5: Optional[object] = None    # vitd_input (so multiponto)
+    unit10: Optional[object] = None   # inferred.out -- mensagens de execucao
+    unit11: Optional[object] = None   # ro1o -- solo da execucao anterior (infer_test == 1)
+    unit12: Optional[object] = None   # ro2o -- tempos da execucao anterior (idem)
+    unit17: Optional[object] = None   # ro1 -- solo desta execucao (binario)
+    unit18: Optional[object] = None   # ro2 -- tempos desta execucao (binario)
+    unit24: Optional[object] = None   # output3 -- fluxos de superficie (flprint == 1)
+    unit28: Optional[object] = None   # output4 -- vegetacao (vegint > eps)
+    unit30: Optional[object] = None   # FASST_defaultlayerprop.inp
+    unit31: Optional[object] = None   # FASST_defaultvegprop.inp
+    unit32: Optional[object] = None   # MODIS_IGBP_vegprop.inp
+    unit33: Optional[object] = None   # UMD_LDAS_vegprop.inp
+    unit55: Optional[object] = None   # output5 -- processos de neve (sprint == 1)
+    unit90: Optional[object] = None   # fasstusersoil -- solos do usuario
+
     def reset(self) -> None:
         """Reinitialize every fixed-size field to the state that
         ``zero_parameters`` (module_zerovars.F90) leaves them in, in place.
@@ -381,6 +411,17 @@ _ZERO_PARAMETERS_SPFLAG_NCLAYERS = (
 )
 
 
+# Unidades logicas de arquivo: handles abertos, que `reset()` nao pode
+# zerar (ver o comentario na secao de unidades da dataclass).
+_UNIT_FIELDS = frozenset(
+    "unit%d" % n for n in (2, 3, 5, 10, 11, 12, 17, 18, 24, 28, 30, 31, 32,
+                           33, 55, 90)
+)
+
+
+# Campos que `reset()` NAO restaura. Duas familias: as arrays alocaveis,
+# cujo ciclo de vida pertence ao driver, e as unidades de arquivo, cujos
+# handles precisam sobreviver entre pontos de grade.
 _ALLOCATABLE_FIELDS = frozenset(
     {
         "slushy", "dmet1", "sdens", "canopy_temp", "airt", "ft", "tt",
@@ -391,4 +432,4 @@ _ALLOCATABLE_FIELDS = frozenset(
         "surfemisf", "surfemisc", "lheatf", "cevap", "ponding",
         "tot_moist", "tot_thick", "sstate",
     }
-)
+) | _UNIT_FIELDS

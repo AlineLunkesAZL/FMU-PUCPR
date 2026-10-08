@@ -73,7 +73,9 @@ EM ANDAMENTO (cronograma de 10 dias uteis).
   Dia 4  vegetacao baixa e alta, mapeamento MODIS/UMD (388-534)
   Dia 5  camadas de solo, bloco de fusao, perfis iniciais, ramo
          multiponto, `sort2` (536-699 e 1483-1534)
-  Dia 6  STEP 2 -- leitura do arquivo meteorologico (702-822)  <-- aqui
+  Dia 6  STEP 2 -- leitura do arquivo meteorologico (702-822)
+  Dia 7  STEP 3 -- as 16 unidades de arquivo, os cabecalhos das
+         saidas e o bloco de hot start (825-1084)  <-- aqui
 `main()` levanta `NotImplementedError` no ponto exato onde a transcricao
 para, de modo que o que ja existe e executavel e verificavel (ver
 `demo()`).
@@ -102,6 +104,21 @@ transcricao de verdade chegar:
                                   posicao que o `.F90` chama `ii` e que o
                                   stub de `initsurface` chama `mpos`: e o
                                   mesmo parametro.
+
+CORRECAO ao paragrafo acima: a assinatura de `read_old_data` E a unica das
+cinco que VAI mudar quando a transcricao chegar. O `.F90` dela faz
+`use fasst_global` de mais de 100 variaveis e ESCREVE em boa parte --
+inclusive `moverlapr`, que o proprio driver le tres linhas depois da
+chamada (`if(jline == 'endr') moverlapr = i`). Como nada disso passa por
+argumento, a versao Python vai precisar de `state` como primeiro
+parametro, no padrao do resto do pacote. O stub herdado de
+`initsurface.py` nao tem esse parametro, e trocar isso mexeria nos
+chamadores em `initsurface.py` e `initwater.py` -- fica para quando
+`read_old_data` for transcrita de verdade. As outras quatro ja recebem
+`state`.
+
+Nota relacionada: `moverlapr` nao e zerado por ninguem -- nem pelo STEP 0,
+nem por `zero_parameters`. Sai de `read_old_data` e fica.
 
 Divergencias deliberadas
 --------------------------
@@ -403,6 +420,31 @@ def _stop(msg):
     sys.exit(1)
 
 
+def _open_or_stop(path, mode, msg):
+    """`open(unit=N,file=...,iostat=io)` mais o bloco de erro que sempre vem
+    depois dele: mensagem com o `iostat`, uma linha em branco, o nome do
+    arquivo, e `stop`.
+
+    Os 12 blocos de abertura dos STEPs 2 e 3 tem exatamente essa forma,
+    variando so o texto -- inclusive os espacos em volta do "error", que sao
+    inconsistentes no original (`error = `, `error=`, com e sem espaco
+    inicial) e ficam preservados no `msg` de cada chamada.
+
+    Ver divergencia D1: no original, `status='unknown'` CRIA o arquivo que
+    falta, o que torna estes ramos de erro praticamente mortos para arquivos
+    de ENTRADA. Aqui os de entrada ('r'/'rb') sao abertos para leitura e a
+    falha cai justamente neste ramo; os de SAIDA ('w'/'wb') continuam sendo
+    criados.
+    """
+    try:
+        return _Unit(path, mode)
+    except OSError as e:
+        print(msg % (e.errno or 1))
+        print(" ")
+        print(path)
+        sys.exit(1)
+
+
 def _to_int(tok, current=0):
     """Item list-directed inteiro. `None` (valor nulo) deixa a variavel
     INALTERADA, como no Fortran."""
@@ -533,6 +575,15 @@ class _Unit:
     def rewind(self):
         """`rewind(u)` -- volta ao primeiro registro."""
         self.f.seek(0)
+
+    # Passagens diretas, para os modulos que recebem a unidade e leem/escrevem
+    # por conta propria: `us_soil_tools.get_user_soil_params` chama
+    # `.readline()` na unidade 90, e as unidades de saida recebem `.write()`.
+    def readline(self):
+        return self.f.readline()
+
+    def write(self, s):
+        return self.f.write(s)
 
     def read_star(self, n):
         """`read(u,*) v1,...,vn` -- leitura list-directed de `n` itens.
@@ -690,6 +741,19 @@ def main(argv=None, _state=None, _locals=None):
     wdepth = 0.0
     ttest = " "
     mtest = " "
+    # idem, usados a partir do STEP 3. `sdensi`/`phie` sao passados a
+    # `read_old_data` na linha 1069 sem nunca terem sido escritos (o
+    # original so os inicializa na linha 1196, dentro do STEP 4); `kk` so e
+    # atribuido quando ha casamento de indice VITD, mas e lido na 1076.
+    fdi = 0
+    kk = 0
+    d1i = 0
+    num_frq = 0
+    vitd_att = " "
+    t1n = 0.0
+    t1oo = 0.0
+    sdensi = 0.0
+    phie = 0.0
 
     it = 0.0
     et = 0.0
@@ -1315,14 +1379,8 @@ def main(argv=None, _state=None, _locals=None):
 
     # abre o arquivo met (linhas 708-715)
     io = 0
-    try:
-        unit1 = _Unit(met_file_name)
-    except OSError as err1:
-        io = err1.errno or 1
-        print(" Error opening met file, error=%3d" % io)
-        print(" ")
-        print(met_file_name)
-        sys.exit(1)
+    unit1 = _open_or_stop(met_file_name, "r",
+                          " Error opening met file, error=%3d")
 
     # Cabecalho global: 11 valores. ATENCAO -- esta mesma linha e lida DE
     # NOVO adiante (linha 786) como o registro do PRIMEIRO sitio, com um
@@ -1471,10 +1529,217 @@ def main(argv=None, _state=None, _locals=None):
     iendi = state.iend
     unit1.close()                                            # fecha o arquivo met
 
+    # ---------------- STEP 3 (linhas 825-1153) ----------------
+    # Le a informacao antiga, se existir; abre arquivos e escreve cabecalhos.
+
+    # arquivo de propriedades padrao de camada (829-839)
+    io = 0
+    state.unit30 = _open_or_stop(
+        "FASST_defaultlayerprop.inp", "r",
+        " Error opening default layerprop file, error = %3d")
+
+    # arquivo de propriedades padrao de vegetacao (841-851)
+    io = 0
+    state.unit31 = _open_or_stop(
+        "FASST_defaultvegprop.inp", "r",
+        " Error opening default vegprop file, error=%3d")
+
+    # arquivo de propriedades de vegetacao MODIS (853-863)
+    io = 0
+    state.unit32 = _open_or_stop(
+        "MODIS_IGBP_vegprop.inp", "r",
+        "Error opening MODIS vegprop file, error = %3d")
+
+    # arquivo de propriedades de vegetacao UMD (865-874)
+    io = 0
+    state.unit33 = _open_or_stop(
+        "UMD_LDAS_vegprop.inp", "r",
+        "Error opening UMD vegprop file, error = %3d")
+
+    # Arquivo de propriedades de solo do usuario; o padrao e
+    # 'fasstusersoil.inp' (876-887).
+    # ESTA e a linha 878 que conserta o ponto de atencao 13 -- mas conserta
+    # so UM dos tres caminhos. Com `lcount == 0` e ponto unico, o nome que o
+    # strip da linha 629 deixou vazio e restaurado aqui. Nos outros dois
+    # casos nao ha conserto: com `lcount != 0` o nome veio do `read` da linha
+    # 628, e no modo multiponto veio do `read` da linha 683 -- se nenhuma
+    # dessas linhas tiver `!`, o nome chega vazio ate aqui e o `open` falha.
+    io = 0
+    if lcount == 0 and state.single_multi_flag == 0:
+        fasstusersoil = "fasstusersoil.inp"
+    state.unit90 = _open_or_stop(
+        fasstusersoil, "r",
+        " Error opening user soil property file, error = %3d")
+
+    # Base para varios nomes de saida (889-896): posicao do ultimo '.' do
+    # nome do arquivo met. `_ch` devolve ' ' para indice 0, que e o que
+    # impede o `met_file_name(0:0)` fora de faixa do original -- ali a
+    # condicao `npos > 0` so e avaliada DEPOIS da substring.
+    npos = mlen
+    while _ch(met_file_name, npos) != "." and npos > 0:
+        npos = npos - 1
+    if npos == 0:
+        npos = mlen
+    fnlen = 0
+    # `fnlen` so era usado pelos `allocate(character(len=fnlen)...)` das
+    # linhas 909-910, que estao comentados: atribuido e nunca lido.
+    fnlen = npos + 3
+
+    # nomeia os arquivos de saida no caso multiponto (898-916)
+    if state.single_multi_flag == 1:
+        io = 0
+        state.unit5 = _open_or_stop(
+            vitd_input, "r", " Error opening complex file, error = %3d")
+
+        # `met_file_name(1:npos)` INCLUI o ponto, entao "yuma.met" com
+        # npos = 5 da "yuma." + "fst" = "yuma.fst".
+        output1 = met_file_name[:npos] + "fst"       # met e dados de superficie
+        output2 = met_file_name[:npos] + "grd"       # informacao nodal
+        output3 = met_file_name[:npos] + "flx"       # fluxos de superficie
+        output4 = met_file_name[:npos] + "vgt"       # dados de vegetacao
+        output5 = met_file_name[:npos] + "snw"       # processos de neve
+
+    io = 0
+    state.unit2 = _open_or_stop(                     # met e info de superficie
+        output1, "w", " Error opening main output, error = %3d")
+
+    if nprint == 1:
+        io = 0
+        state.unit3 = _open_or_stop(                 # saida nodal
+            output2, "w", " Error opening node output, error = %3d")
+
+    if flprint == 1:
+        io = 0
+        state.unit24 = _open_or_stop(                # saida de fluxos
+            output3, "w", " Error opening flux output, error=%3d")
+
+        state.unit24.write("Surface Flux File\n")
+        state.unit24.write("Conventions used: \n")
+        state.unit24.write("     + => flux towards surface\n")
+        state.unit24.write("     sheat > 0 -> Tair > Tgr => surface warms, "
+                           "air cools\n")
+        state.unit24.write("     sheat < 0 -> Tair < Tgr => surface cools, "
+                           "air warms\n")
+        state.unit24.write("     lheat > 0 -> qair > qgr => condensation; "
+                           "surface warms, air cools\n")
+        state.unit24.write("     lheat < 0 -> qair < qgr => evaporation; "
+                           "surface cools, air warms\n")
+        state.unit24.write(" \n")
+
+    if vegint > EPS:
+        io = 0
+        state.unit28 = _open_or_stop(                # saida de vegetacao
+            output4, "w", " Error opening veg output, error = %3d")
+
+    if sprint == 1:
+        io = 0
+        state.unit55 = _open_or_stop(                # saida de neve
+            output5, "w", " Error opening snow output, error = %3d")
+
+    # Abre o arquivo de flags de inferencia, apagando o anterior se existir
+    # (984-985). Sem `iostat=` e sem ramo de erro no original.
+    state.unit10 = _Unit("inferred.out", "w")
+
+    # arquivos usados nas execucoes de "hot start" (987-1011)
+    ro1 = met_file_name[:npos - 1] + "_ro_soil.dat"
+    state.unit17 = _Unit(ro1, "wb")                  # unformatted, access=stream
+    ro2 = met_file_name[:npos - 1] + "_ro_time.dat"
+    state.unit18 = _Unit(ro2, "wb")
+
+    if state.infer_test == 1:
+        state.unit11 = _Unit(ro1o, "rb")
+        # Ponto de atencao 11: assume que `ro1o` termina em `_soil.dat`
+        # (9 caracteres), sem validar. Se o `read` da linha 256 nao tiver
+        # `!`, o strip deixou `ro1o` vazio e isto da so "_time.dat" -- outra
+        # consequencia do ponto 13.
+        ro2o = ro1o[:len(ro1o.rstrip()) - 9] + "_time.dat"
+        state.unit12 = _Unit(ro2o, "rb")
+
+    # Determina o numero de linhas faltantes no novo arquivo met e
+    # dimensiona os arrays de acordo (1013-1063).
+    if state.single_multi_flag == 0:
+        i = 1
+        tflag = 0
+        while i <= state.met_count and tflag == 0:
+            if state.vitd_index == vitd_indexm[i]:
+                fdi = state.freq_id
+                tflag = 1
+                kk = i
+            i = i + 1
+        if tflag == 0:
+            print(" Something wrong with input meteorological file, stopping.")
+            sys.exit(1)
+    elif state.single_multi_flag == 1:
+        io = 0
+        i = 0
+        vitd_att = " "
+        while io != -1:
+            vitd_att, io = state.unit5.read_a_io(vitd_att)
+            i = i + 1
+        i = i - 2
+        num_frq = i
+        state.unit5.rewind()
+
+        io = 0
+        vitd_att = " "
+        vitd_att, io = state.unit5.read_a_io(vitd_att)    # linha de cabecalho
+
+        j = 1
+        while j <= num_frq:
+            (wtype, io, lcount, nm0, wvel, wdepth, mtest,
+             sname) = read_complex(state, wtype, io, lcount, nm0, wvel,
+                                   wdepth, mtest, sname)
+            i = 1
+            tflag = 0
+            while i <= state.met_count and tflag == 0:
+                if state.vitd_index == vitd_indexm[i]:
+                    if j == 1:
+                        fdi = state.freq_id
+                    tflag = 1
+                    kk = i
+                i = i + 1
+            j = j + 1
+        state.unit5.rewind()
+    # Ponto de atencao 5, primeira metade: este `i = i - 1` esta FORA dos
+    # dois ramos. No ponto unico `i` saiu do `do while` valendo kk+1 (a
+    # execucao so chega aqui com tflag == 1, senao teria parado), entao
+    # `i` passa a ser exatamente `kk`. No multiponto `i` e o contador do
+    # laco interno da ULTIMA chamada de read_complex, sem relacao nenhuma
+    # com sitio de met -- e e esse `i` que o STEP 3 usa depois para indexar
+    # `metm` (linhas 1095-1099, Dia 8).
+    i = i - 1
+
+    if state.infer_test == 1:
+        d1i = 3
+        # No ponto unico isto e uma ida e volta sem efeito: `fdi` foi
+        # atribuido DE `freq_id` na linha 1019. No multiponto tem sentido --
+        # restaura o `freq_id` do primeiro registro, depois de o laco de
+        # read_complex te-lo avancado.
+        state.freq_id = fdi
+        # `max(moverlap, istart)`: MOVERLAP e a constante 15 e `istart` vale
+        # 2 quando infer_test == 1, entao o resultado e sempre 15.
+        wstart = max(MOVERLAP, state.istart)
+        (sdensi, phie, timeo) = read_old_data(d1i, state.dstart, wstart,
+                                              sdensi, phie, timeo)
+
+        for k in range(1, state.moverlapr + 1):
+            t1o[k] = 0e0
+            t1o[k] = met_date(timeo[k][1], timeo[k][2], timeo[k][3],
+                              timeo[k][4])
+        t1n = 0e0
+        t1n = met_date(metm[kk, 1, 1], metm[kk, 1, 2], metm[kk, 1, 3],
+                       metm[kk, 1, 4])
+
+        state.mpos = 0
+        for k in range(1, state.moverlapr):
+            if t1o[k] < t1n and t1o[k + 1] >= t1n:
+                state.mpos = k
+        if state.mpos == 0:
+            state.mpos = state.moverlapr
+
     # ------------------------------------------------------------------
-    # A transcricao para aqui: linha 822 do original (fim do STEP 2).
-    # Falta:
-    #   STEP 3   (825-1153)  abre unidades, hot start, lacunas, aloca
+    # A transcricao para aqui: linha 1084 do original. Falta:
+    #   STEP 3   (1086-1153) lacunas de tempo, `maxlines`, alocacao
     #   STEP 4   (1156-1425) lacos principais
     #   STEP 6   (1433-1480) fecha arquivos, desaloca, tempo de CPU
     # ------------------------------------------------------------------
@@ -1482,8 +1747,8 @@ def main(argv=None, _state=None, _locals=None):
         _locals.update(locals())
     unit4.close()
     raise NotImplementedError(
-        "transcricao de fasst_driver.F90 em andamento: parou na linha 822 "
-        "do original (fim do STEP 2, leitura do meteorologico)"
+        "transcricao de fasst_driver.F90 em andamento: parou na linha 1084 "
+        "do original (fim do bloco de hot start do STEP 3)"
     )
 
     et = time.process_time()                                   # call cpu_time(et)
@@ -1667,41 +1932,77 @@ def demo():
 
     _MET = _met()
 
-    def _run(linhas, met=None):
-        """Roda `main` ate onde a transcricao chegou e devolve (estado, saida)."""
+    # O STEP 3 abre quatro arquivos de propriedades por nome FIXO, relativos
+    # ao diretorio corrente: FASST_defaultlayerprop.inp,
+    # FASST_defaultvegprop.inp, MODIS_IGBP_vegprop.inp e
+    # UMD_LDAS_vegprop.inp. Aqui bastam stubs vazios -- quem le o conteudo
+    # (`veg_propl`/`veg_proph`) nao e chamado pelo driver. Tambem e por isso
+    # que `_run` troca de diretorio: assim `inferred.out` e os `output1..5`
+    # de nome relativo caem no temporario, nao no repo.
+    _PROPS = ("FASST_defaultlayerprop.inp", "FASST_defaultvegprop.inp",
+              "MODIS_IGBP_vegprop.inp", "UMD_LDAS_vegprop.inp")
+    for _n in _PROPS:
+        with open(os.path.join(d, _n), "w") as f:
+            f.write("")
+    with open(os.path.join(d, "fasstusersoil.inp"), "w") as f:
+        f.write("")
+    # Os dois arquivos binarios da execucao ANTERIOR, para o caminho de hot
+    # start (infer_test == 1). No original o `status='unknown'` os criaria
+    # vazios e `read_old_data` leria de um arquivo vazio; aqui as unidades
+    # 11 e 12 abrem para leitura e a falta e erro -- ver divergencia D1.
+    for _n in ("velho_ro_soil.dat", "velho_ro_time.dat"):
+        with open(os.path.join(d, _n), "wb") as f:
+            f.write(b"")
+    # Nomes que alguns fixtures informam no proprio `.inp` (unidades 90 e 5).
+    # `complexo.vitd` tem UMA linha so de proposito: o laco de contagem da
+    # linha 1034 faz `num_frq = (linhas + 1) - 2`, entao com 1 linha
+    # `num_frq` sai 0 e o laco de `read_complex` nao roda -- e o unico jeito
+    # de atravessar o STEP 3 multiponto sem bater no stub.
+    for _n in ("meuarquivo.inp", "meusolo.inp"):
+        with open(os.path.join(d, _n), "w") as f:
+            f.write("")
+    with open(os.path.join(d, "complexo.vitd"), "w") as f:
+        f.write("cabecalho do arquivo complexo\n")
+
+    def _exec(linhas, met, st, loc):
+        """Escreve o `.inp`, troca para o diretorio temporario e roda `main`."""
         import contextlib
         import io as _io
         caminho = os.path.join(d, "caso.inp")
         with open(caminho, "w") as f:
             f.write(linhas.replace("@MET@", met if met else _MET))
-        st = FasstState()
         saida = _io.StringIO()
-        with contextlib.redirect_stdout(saida):
-            try:
-                main(["fasst_driver", caminho], _state=st)
-            except NotImplementedError:
-                pass                                  # parou na linha 822
-        return st, saida.getvalue()
+        antes = os.getcwd()
+        try:
+            os.chdir(d)
+            with contextlib.redirect_stdout(saida):
+                try:
+                    main(["fasst_driver", caminho], _state=st, _locals=loc)
+                except NotImplementedError:
+                    pass                   # parou no marcador da transcricao
+        finally:
+            os.chdir(antes)
+        return saida.getvalue()
+
+    def _run(linhas, met=None):
+        """Roda `main` ate onde a transcricao chegou e devolve (estado, saida)."""
+        st = FasstState()
+        return st, _exec(linhas, met, st, None)
 
     def _run_loc(linhas, met=None):
         """Como `_run`, mas tambem devolve as variaveis LOCAIS de `main`.
 
-        Metade do que o STEP 1 e o STEP 2 produzem (`icnti`, `metm`, `latm`,
-        `output1..5`, `fasstusersoil`, `sname`, `surfdepth`) sao locais do
-        `program`, nao campos de `FasstState` -- sem isto ficariam sem
-        verificacao nenhuma.
+        Metade do que os STEPs 1 e 2 produzem (`icnti`, `metm`, `latm`,
+        `output1..5`, `fasstusersoil`, `sname`, `surfdepth`, `npos`) sao
+        locais do `program`, nao campos de `FasstState` -- sem isto ficariam
+        sem verificacao nenhuma.
+
+        ATENCAO: a captura acontece no marcador de fim da transcricao. Se um
+        stub levantar antes (e `read_complex` levanta, no modo multiponto),
+        `loc` volta VAZIO -- nesse caso usar `_run` e checar so o estado.
         """
-        import contextlib
-        import io as _io
-        caminho = os.path.join(d, "caso.inp")
-        with open(caminho, "w") as f:
-            f.write(linhas.replace("@MET@", met if met else _MET))
         st, loc = FasstState(), {}
-        with contextlib.redirect_stdout(_io.StringIO()):
-            try:
-                main(["fasst_driver", caminho], _state=st, _locals=loc)
-            except NotImplementedError:
-                pass
+        _exec(linhas, met, st, loc)
         return st, loc
 
     _CABECALHO = (
@@ -1797,13 +2098,17 @@ def demo():
         with open(caminho, "w") as f:
             f.write(linhas.replace("@MET@", _MET))
         saida = _io.StringIO()
+        antes = os.getcwd()
         try:
+            os.chdir(d)                    # como `_exec`: nao sujar o repo
             with contextlib.redirect_stdout(saida):
                 main(["fasst_driver", caminho], _state=FasstState())
         except SystemExit as e:
             assert e.code == 1
             assert trecho in saida.getvalue(), saida.getvalue()
             return
+        finally:
+            os.chdir(antes)
         raise AssertionError("deveria ter parado: " + trecho)
 
     _para("@MET@ !\n2 0 0.5 1 !\n", "infer test flag must be 0 or 1")
@@ -2089,8 +2394,32 @@ def demo():
                  "complexo.vitd !\nmeusolo.inp !\n")
     assert st.single_multi_flag == 1 and st.vitd_index == 0
 
-    st, saida = _run("@MET@ !\n0 2 0.5 1 !\n1.5 0.0 1 1 0 100 0 !\n")
-    assert "Model does not recognize single_multi_flag input of =   2" in saida
+    # `single_multi_flag` invalido: o `else` da linha 693 so imprime, sem
+    # `stop` -- mas o programa morre alguns passos depois de qualquer forma,
+    # no STEP 3, porque nenhum dos dois ramos definiu `output1` e o `open`
+    # recebe o nome em branco que o STEP 0 deixou. Ou seja, o "nao para" e
+    # so aparente.
+    import contextlib
+    import io as _io
+    caminho_ruim = os.path.join(d, "flag.inp")
+    with open(caminho_ruim, "w") as f:
+        f.write("@MET@ !\n0 2 0.5 1 !\n1.5 0.0 1 1 0 100 0 !\n"
+                .replace("@MET@", _MET))
+    saida = _io.StringIO()
+    antes = os.getcwd()
+    try:
+        os.chdir(d)
+        with contextlib.redirect_stdout(saida):
+            main(["fasst_driver", caminho_ruim], _state=FasstState())
+    except SystemExit as e:
+        assert e.code == 1
+        texto = saida.getvalue()
+        assert "Model does not recognize single_multi_flag input of =   2" in texto
+        assert "Error opening main output" in texto
+    else:
+        raise AssertionError("esperado SystemExit com single_multi_flag = 2")
+    finally:
+        os.chdir(antes)
 
     # ---- sort2 (linhas 1483-1534) ----
     def _arr(vals, fill=0.0):
@@ -2310,15 +2639,297 @@ def demo():
     assert loc["output1"] == "saida.fst" and loc["output5"] == "saida.snw"
     assert loc["surfdepth"] == 5e-2
     assert loc["ttest"] == "n" and loc["mtest"] == "n"
-    # ponto de atencao 13 no `fasstusersoil`: sem `!` na linha e sem leitura
-    # (lcount == 0), o strip da linha 629 deixa o nome VAZIO. E a linha 878,
-    # no STEP 3, que o restaura -- ainda nao transcrita.
-    assert loc["lcount"] == 0 and loc["fasstusersoil"] == ""
+    # Ponto de atencao 13 no `fasstusersoil`: sem `!` na linha e sem leitura
+    # (lcount == 0), o strip da linha 629 deixa o nome VAZIO -- e a linha
+    # 878, ja no STEP 3, o restaura para o padrao. A captura acontece depois
+    # dela, entao o que se ve aqui e o nome ja consertado.
+    assert loc["lcount"] == 0 and loc["fasstusersoil"] == "fasstusersoil.inp"
     # ramo multiponto: agora da para ver os dois nomes lidos
-    st, loc = _run_loc("@MET@ !\n0 1 0.5 1 !\n1.5 0.0 1 1 0 100 0 !\n"
-                       "complexo.vitd !\nmeusolo.inp !\n")
+    _MULTI = ("@MET@ !\n0 1 0.5 1 !\n1.5 0.0 1 1 0 100 0 !\n"
+              "complexo.vitd !\nmeusolo.inp !\n")
+    st, loc = _run_loc(_MULTI)
     assert loc["vitd_input"] == "complexo.vitd"
     assert loc["fasstusersoil"] == "meusolo.inp"
+
+    # ---- STEP 3: unidades de arquivo e hot start (linhas 825-1084) ----
+
+    # As 16 unidades do STEP 3 ficam em campos de `FasstState`, e os nomes
+    # estao em `_ALLOCATABLE_FIELDS` para que `reset()` nao as zere entre
+    # pontos de grade.
+    from .state import _UNIT_FIELDS
+    assert len(_UNIT_FIELDS) == 16
+    from .state import _ALLOCATABLE_FIELDS
+    assert _UNIT_FIELDS <= _ALLOCATABLE_FIELDS
+
+    st, loc = _run_loc(_LAND)
+    # sempre abertas: as 4 tabelas de propriedades, o solo do usuario, a
+    # saida principal, o inferred.out e os dois binarios de hot start
+    for campo in ("unit30", "unit31", "unit32", "unit33", "unit90",
+                  "unit2", "unit10", "unit17", "unit18"):
+        assert getattr(st, campo) is not None, campo
+    # `nprint == 1` no cabecalho -> unidade 3 aberta; `flprint == 1` ->
+    # unidade 24; `sprint == 0` -> unidade 55 fica fechada; `vegint == 0`
+    # (nao > EPS) -> unidade 28 fica fechada
+    assert st.unit3 is not None and st.unit24 is not None
+    assert st.unit55 is None and st.unit28 is None
+    # ponto unico: nem a unidade 5 nem os binarios da execucao anterior
+    assert st.unit5 is None and st.unit11 is None and st.unit12 is None
+
+    # os handles sobrevivem a um `reset()` (o laco multiponto chama
+    # `zero_parameters` por ponto, muito depois destes `open`)
+    handles = {c: getattr(st, c) for c in _UNIT_FIELDS}
+    st.reset()
+    assert all(getattr(st, c) is handles[c] for c in _UNIT_FIELDS)
+
+    # `npos`: posicao do ultimo '.' do nome do met, e a base dos nomes
+    # derivados. `met_file_name[:npos]` INCLUI o ponto.
+    st, loc = _run_loc(_LAND)
+    assert loc["met_file_name"][loc["npos"] - 1] == "."
+    assert loc["met_file_name"][loc["npos"]:] == "met"
+    assert loc["fnlen"] == loc["npos"] + 3        # atribuido e nunca lido
+    # os dois binarios de hot start saem do nome do met sem a extensao
+    assert loc["ro1"].endswith("_ro_soil.dat")
+    assert loc["ro2"].endswith("_ro_time.dat")
+    assert loc["ro1"][:-len("_ro_soil.dat")] == loc["met_file_name"][:loc["npos"] - 1]
+    assert os.path.exists(loc["ro1"]) and os.path.exists(loc["ro2"])
+    assert os.path.exists(os.path.join(d, "inferred.out"))
+    assert os.path.exists(os.path.join(d, "saida.fst"))      # output1
+
+    # Cabecalho de 8 linhas da saida de fluxos (948-959), escrito na hora.
+    # O handle continua aberto (o driver so fecha no STEP 6), e Python
+    # bufferiza -- dai o flush antes de ler.
+    st.unit24.f.flush()
+    with open(os.path.join(d, "saida.flx")) as f:
+        flx = f.read()
+    assert flx.startswith("Surface Flux File\nConventions used: \n")
+    assert "+ => flux towards surface" in flx
+    assert "sheat > 0 -> Tair > Tgr => surface warms, air cools" in flx
+    assert "lheat < 0 -> qair < qgr => evaporation; surface cools, air warms" in flx
+    assert len(flx.rstrip("\n").split("\n")) == 8
+
+    # sem '.' no nome do met, `npos` volta a `mlen` (linha 894)
+    st, loc = _run_loc(_LAND, met=_met("semponto"))
+    assert loc["npos"] == loc["mlen"] == len(loc["met_file_name"])
+
+    # O laco de busca do '.' comeca EM `mlen`, nao em `mlen - 1`: so um
+    # nome cujo ULTIMO caractere e '.' distingue as duas coisas, e para
+    # isso ele precisa ter um '.' anterior tambem. Com 'a.b.' o original
+    # acha o ponto final (npos = 4); comecando um antes acharia o do
+    # meio (npos = 2) e as saidas sairiam "a.fst" em vez de "a.b.fst".
+    st, loc = _run_loc(_LAND, met=_met("a.b."))
+    assert loc["npos"] == loc["mlen"] == len(loc["met_file_name"])
+    # `output1` nao serve aqui: no ponto unico ele vem do proprio `.inp`.
+    # `ro1` e derivado do nome do met e serve.
+    assert loc["ro1"].endswith("a.b_ro_soil.dat")
+
+
+    # o casamento de indice VITD: `kk` e o sitio casado, e `i` sai do laco
+    # valendo kk+1 -- e o `i = i - 1` da linha 1063 o traz de volta a kk
+    # (primeira metade do ponto de atencao 5)
+    st, loc = _run_loc(_LAND)
+    assert loc["tflag"] == 1
+    assert loc["kk"] == 1 and loc["i"] == loc["kk"]
+    assert loc["vitd_indexm"][loc["kk"]] == st.vitd_index == 1234
+    # `fdi = freq_id` e depois `freq_id = fdi`: ida e volta sem efeito no
+    # ponto unico. `freq_id` vale 1, posto por `zero_parameters`.
+    assert loc["fdi"] == st.freq_id == 1
+
+    # vitd_index que nao casa com nenhum sitio do met: para o programa
+    _SEM_CASO = _CABECALHO.replace("1234                         ! vitd_index",
+                                   "9999                         ! vitd_index")
+    _para(_SEM_CASO + _TERRA + "0 ! vegl\n0 ! vegh\n" + _SOLO,
+          "Something wrong with input meteorological file")
+
+    # `nprint`/`flprint`/`sprint`/`vegint` controlam quais saidas abrem
+    _CAB2 = _CABECALHO.replace("1.5 0.0 1 1 0 100 0", "1.5 0.5 0 0 1 100 0")
+    st, loc = _run_loc(_CAB2 + _TERRA + "0 ! vegl\n0 ! vegh\n" + _SOLO)
+    assert loc["nprint"] == 0 and st.unit3 is None
+    assert loc["flprint"] == 0 and st.unit24 is None
+    assert loc["sprint"] == 1 and st.unit55 is not None
+    assert loc["vegint"] == 0.5 and st.unit28 is not None     # vegint > EPS
+
+    # A guarda da vegetacao e `vegint > eps`, nao `>= eps`: com vegint
+    # valendo EXATAMENTE eps a unidade 28 NAO abre. O `repr` de
+    # `sys.float_info.epsilon` faz round-trip, e esta leitura nao passa
+    # por `anint`, entao o valor chega inteiro pelo `.inp`.
+    _CAB_EPS = _CABECALHO.replace("1.5 0.0 1 1 0 100 0",
+                                  "1.5 %r 0 0 1 100 0" % EPS)
+    st, loc = _run_loc(_CAB_EPS + _TERRA + "0 ! vegl\n0 ! vegh\n" + _SOLO)
+    assert loc["vegint"] == EPS and st.unit28 is None
+
+
+    # ---- multiponto: unidade 5 e os nomes de saida derivados do met ----
+    # `complexo.vitd` tem uma linha so, entao `num_frq` sai 0 e o laco de
+    # `read_complex` nao roda -- da para atravessar o STEP 3 inteiro.
+    st, loc = _run_loc(_MULTI)
+    assert st.unit5 is not None
+    assert loc["num_frq"] == 0
+    base = loc["met_file_name"][:loc["npos"]]
+    assert loc["output1"] == base + "fst" and loc["output2"] == base + "grd"
+    assert loc["output3"] == base + "flx" and loc["output4"] == base + "vgt"
+    assert loc["output5"] == base + "snw"
+    assert os.path.exists(loc["output1"])
+    # PONTO DE ATENCAO 5, segunda metade: no multiponto o `i` que chega ao
+    # `i = i - 1` e o contador de LINHAS da unidade 5, nao um indice de
+    # sitio. Com N linhas no arquivo complexo: o laco de contagem sai com
+    # `i = N+1` (a ultima volta e a que ve o EOF), `i = i - 2` deixa `N-1`,
+    # o laco de `read_complex` nao mexe em `i` quando nao roda, e o
+    # `i = i - 1` da linha 1063 fecha em `N-2`. Com N = 1 da -1 -- um
+    # indice NEGATIVO, que o Dia 8 vai usar para indexar `metm`.
+    assert loc["i"] == -1 and loc["kk"] == 0
+    assert loc["tflag"] == 0        # nenhum casamento, e aqui nao ha `stop`
+
+    # com mais de uma linha no complexo, `read_complex` e chamada e levanta
+    vitd3 = os.path.join(d, "tres.vitd")
+    with open(vitd3, "w") as f:
+        f.write("cabecalho\nregistro 1\nregistro 2\n")
+    st, loc = _run_loc(_MULTI.replace("complexo.vitd", "tres.vitd"))
+    assert loc == {}, "read_complex deveria ter levantado antes da captura"
+    assert st.unit5 is not None      # mas as unidades ja estavam abertas
+
+    # ---- hot start (infer_test == 1): unidades 11 e 12 ----
+    _HOT = ("@MET@ !\n1 0 0.5 1 !\nvelho_ro_soil.dat ! ro1o\n"
+            "1.5 0.0 1 1 0 100 0 !\n1234 !\n" + "saida.fst !\n" * 5 +
+            "0.0 0.0 !\n0.01 !\n0 !\n")
+    st, loc = _run_loc(_HOT)
+    # `read_old_data` e stub e levanta, entao a captura nao acontece --
+    # mas as unidades 11 e 12 ja foram abertas antes dela
+    assert loc == {}
+    assert st.unit11 is not None and st.unit12 is not None
+    assert st.istart == 2
+    # ponto de atencao 11: o nome da unidade 12 vem de cortar 9 caracteres
+    # ("_soil.dat") do nome da 11, sem validacao
+    assert st.unit11.path == "velho_ro_soil.dat"
+    assert st.unit12.path == "velho_ro_time.dat"
+    # e sao binarios ('rb'), nao texto
+    assert "b" in st.unit11.f.mode and "b" in st.unit17.f.mode
+
+    # ponto 11 na pratica: um nome que NAO termina em "_soil.dat" gera um
+    # nome truncado em lugar nenhum. "abc.dat" (7 caracteres) -> [:-2] ->
+    # "abc.d" sem os 9, ou seja len-9 = -2 -> "abcde"[:-2]
+    nome_curto = "curto.dat"                                  # 9 caracteres
+    with open(os.path.join(d, nome_curto), "wb") as f:
+        f.write(b"")
+    with open(os.path.join(d, "_time.dat"), "wb") as f:
+        f.write(b"")
+    st, loc = _run_loc(_HOT.replace("velho_ro_soil.dat", nome_curto))
+    assert st.unit12.path == "_time.dat"     # len("curto.dat") - 9 == 0
+
+    # `inferred.out` e aberto com `status='unknown'` e o comentario da linha
+    # 984 diz "erase it first if it already exists": o conteudo anterior
+    # tem de ir embora.
+    with open(os.path.join(d, "inferred.out"), "w") as f:
+        f.write("sobra de uma execucao anterior\n")
+    st, loc = _run_loc(_LAND)
+    st.unit10.f.flush()
+    with open(os.path.join(d, "inferred.out")) as f:
+        assert f.read() == ""
+
+    # ---- o resto do bloco de hot start, com `read_old_data` postico ----
+    # Com o stub real a execucao levanta na linha 1069 e nada depois dela e
+    # alcancavel: a chamada em si, o laco de `t1o`, o `t1n` e a busca de
+    # `mpos`. Trocar a funcao por uma que registra os argumentos e devolve
+    # um `timeo` sintetico cobre os quatro.
+    _rod_real = globals()["read_old_data"]
+
+    def _hot(horas, met=None, hot=None):
+        """Roda o caminho de hot start com `read_old_data` postico.
+
+        `horas` sao as horas dos registros antigos; `moverlapr` sai do
+        tamanho da lista (no original e `read_old_data` que o escreve, e
+        ninguem o zera, entao da para semea-lo).
+        """
+        chamadas = []
+
+        def _falso(d1i_, ii_, wstart_, sdensi_, phie_, timeo_):
+            chamadas.append((d1i_, ii_, wstart_, sdensi_, phie_, timeo_))
+            t = [[0.0] * 5 for _ in range(MOVERLAP + 1)]
+            for kk_, hr_ in enumerate(horas, start=1):
+                t[kk_][1] = 2010.0
+                t[kk_][2] = 100.0
+                t[kk_][3] = float(hr_)
+                t[kk_][4] = 0.0
+            return 123.0, 0.5, t
+
+        semente, loc = FasstState(), {}
+        semente.moverlapr = len(horas)
+        globals()["read_old_data"] = _falso
+        try:
+            _exec(hot if hot else _HOT, met, semente, loc)
+        finally:
+            globals()["read_old_data"] = _rod_real
+        return semente, loc, chamadas
+
+    # a chamada da linha 1069, argumento por argumento
+    st, loc, chamadas = _hot((10, 11, 13, 14))
+    assert len(chamadas) == 1
+    d1i_, ii_, wstart_, sdensi_, phie_, timeo_ = chamadas[0]
+    assert d1i_ == 3                             # `d1i = 3`, linha 1066
+    assert ii_ == st.dstart                      # o 2o argumento e `dstart`
+    # `max(moverlap, istart)`: MOVERLAP e 15 e istart vale 2 com
+    # infer_test == 1, entao o max e sempre o 15
+    assert wstart_ == MOVERLAP == 15 and st.istart == 2
+    assert len(timeo_) == MOVERLAP + 1           # timeo(moverlap,4)
+    # os valores de retorno voltam para as locais do driver
+    assert loc["sdensi"] == 123.0 and loc["phie"] == 0.5
+
+    # `t1o` recebe as datas antigas; `t1n` e a data da 1a linha do met do
+    # sitio casado (`metm(kk,1,1..4)`), que e 2010/100 12:00
+    assert [loc["t1o"][k] for k in (1, 2, 3, 4)] == [
+        met_date(2010.0, 100.0, h, 0.0) for h in (10.0, 11.0, 13.0, 14.0)]
+    assert loc["t1n"] == met_date(
+        *(loc["metm"][loc["kk"], 1, c] for c in (1, 2, 3, 4)))
+    # a busca de `mpos`: o ultimo k com t1o[k] < t1n <= t1o[k+1].
+    # 11h < 12h <= 13h -> k = 2.
+    assert st.mpos == 2
+
+    # O 2o argumento e `dstart`, nao `istart`: com timstep == 3 e dois
+    # sitios eles passam a ser diferentes (dstart = min(14, icnti) = 3,
+    # istart = 2), e e o dstart que chega la.
+    met2 = _met("hot3.met",
+                cabecalho="3 32 32.5 -114.0 50.0 1234 2 -7.0 3.0 -999.0 2.0",
+                corpo="".join(_linha_met(h) for h in (12, 13, 14))
+                      + "0 0 40.0 -80.0 100.0 5678 0 0.0 0.0 0.0\n"
+                      + "Year DOY Hr Min ...\n  unidades\n"
+                      + "".join(_linha_met(h, ano=2011) for h in (12, 13, 14)))
+    st, loc, chamadas = _hot((10, 11, 13, 14), met=met2)
+    assert st.dstart == 3 and st.istart == 2 and st.dstart != st.istart
+    assert chamadas[0][1] == 3
+
+    # Comparacoes exatas: com um registro antigo CAINDO em cima de `t1n`
+    # (12h), o `<` estrito do lado esquerdo e o `>=` do direito importam.
+    # Original: k=1 (10h < 12h <= 12h) -> mpos = 1.
+    st, loc, _ = _hot((10, 12, 13, 14))
+    assert st.mpos == 1
+
+    # quando nenhum par cerca `t1n`, `mpos` cai no fallback `= moverlapr`
+    st, loc, _ = _hot((18, 19, 20, 21))
+    assert st.mpos == st.moverlapr == 4
+
+    # `moverlapr` no maximo (= MOVERLAP): o laco vai so ate moverlapr-1
+    # justamente para nao ler `t1o(moverlapr+1)`, que estouraria o array
+    # declarado `t1o(moverlap)`.
+    st, loc, _ = _hot(tuple(range(1, MOVERLAP + 1)))
+    assert st.moverlapr == MOVERLAP == 15
+    assert len(loc["t1o"]) == MOVERLAP + 1       # indices 0..15
+    assert st.mpos == 11                         # 11h < 12h <= 12h
+
+    # O caso que realmente exercita o limite do laco: `t1n` DEPOIS de todos
+    # os registros antigos. Ai a primeira metade da condicao e verdadeira
+    # ate k = moverlapr, e so o limite `moverlapr - 1` evita a leitura de
+    # `t1o[moverlapr + 1]`. Com met comecando as 23h e 15 registros antigos
+    # de 1h a 15h, nenhum par cerca `t1n` -> fallback.
+    met23 = _met("hot23.met",
+                 corpo="".join(_linha_met(h) for h in (23, 0, 1)))
+    st, loc, _ = _hot(tuple(range(1, MOVERLAP + 1)), met=met23)
+    assert loc["t1n"] == met_date(2010.0, 100.0, 23.0, 0.0)
+    assert loc["t1o"][MOVERLAP] < loc["t1n"]     # a condicao NAO curto-circuita
+    assert st.mpos == st.moverlapr == MOVERLAP
+
+    # `freq_id = fdi` (linha 1067): no ponto unico e ida e volta, mas o
+    # valor tem de chegar inteiro -- `zero_parameters` o deixa em 1.
+    st, loc, _ = _hot((10, 11, 13, 14))
+    assert loc["fdi"] == 1 and st.freq_id == 1
 
     print("demo OK")
 
