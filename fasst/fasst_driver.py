@@ -75,7 +75,9 @@ EM ANDAMENTO (cronograma de 10 dias uteis).
          multiponto, `sort2` (536-699 e 1483-1534)
   Dia 6  STEP 2 -- leitura do arquivo meteorologico (702-822)
   Dia 7  STEP 3 -- as 16 unidades de arquivo, os cabecalhos das
-         saidas e o bloco de hot start (825-1084)  <-- aqui
+         saidas e o bloco de hot start (825-1084)
+  Dia 8  STEP 3 -- lacunas de tempo, `maxlines`, `allocate_run_arrays`
+         (1086-1153)  <-- aqui
 `main()` levanta `NotImplementedError` no ponto exato onde a transcricao
 para, de modo que o que ja existe e executavel e verificavel (ver
 `demo()`).
@@ -273,7 +275,32 @@ correspondente do codigo, conforme for preenchido.
     `anint(.,20)` do `sloper` (onde 1.57 volta 1.5699999999999998). Nao e
     defeito de transcricao -- e a aritmetica IEEE do original, preservada.
 9.  `tstps == 0` quando `timstep <= 0` (linha 1092): `rtstps` fica 0, logo
-    `msteps1 = 0` sempre e nenhuma lacuna e detectada.
+    `msteps1 = 0` sempre e nenhuma lacuna e detectada. Note que `tstps` sai
+    de `int(rtstps)`, truncando: com `timstep = 9` o quociente 2.666... vira
+    2, nao 3.
+17. `modyo` (linha 1102) e calculado e NUNCA lido. A unica linha que o
+    usaria -- `if(mody /= modyo) daylim = 1.07d0`, 1105 -- esta comentada no
+    proprio Fortran. Custo de calculo sem efeito.
+19. O ramo bissexto do laco de lacunas (fator 367, linhas 1109-1111) e
+    INALCANCAVEL para qualquer ano real. `mody` e calculado sobre o ano JA
+    QUANTIZADO pelo ponto 16, e `anint(2012*1d15)*1d-15` devolve
+    2012.0000000000002274, logo `mody = 2.27e-13` -- muito acima de
+    `eps = 2.22e-16`. Os unicos anos que passam o teste sao os multiplos de
+    4 pequenos o bastante para `ano*1d15` caber exato num double (< 2^53):
+    0, 4, 8 e 16 (o 12 NAO passa, da 1.78e-15). Em dado de verdade, o laco
+    sempre usa 366 -- de acordo com `met_date`, que faz o mesmo teste sobre
+    o mesmo valor quantizado, entao os dois lados sao consistentes.
+20. `mtsteps` nao e uma contagem de registros faltantes: e uma aproximacao
+    cujo arredondamento depende de QUAIS horas a lacuna cai entre. Com dado
+    horario, uma lacuna de um registro da produto 1.999999974 (-> 1) em 21
+    dos 22 pares de horas possiveis, e 2.000000852 (-> 2) entre 20h e 22h,
+    porque o erro do ponto 16 muda de sinal. Na virada de ano o vies e
+    maior: uma hora faltando entre 365/22h e 001/00h conta 25 passos,
+    porque `met_date` divide o dia-do-ano por 366 e nao por 365. E
+    justamente para mascarar isso que `daylim` sobe para 25.07 (linha 1106).
+21. Os dois `msteps1 = 0` (linhas 1088 e 1108) sao armazenamentos MORTOS:
+    os dois ramos seguintes atribuem `msteps1` incondicionalmente, e depois
+    do laco ninguem le `msteps1` -- so `mtsteps` sobrevive.
 10. Linhas 565-572: `soiltype(2) = soiltype(1)` acontece ANTES de
     `soiltype(1) = 26`, o que parece dependencia de ordem -- mas NAO e.
     Para chegar a este ramo e preciso `wflag2 == 1` com `nlayers <= 1`, e
@@ -313,9 +340,11 @@ Pendencias
   nenhum `for` transcrito ate agora tem a variavel lida depois do laco, e
   os pontos onde o original depende disso (o laco de sitios do STEP 2, o
   `i = i - 1` da linha 1063) sao `do while` com incremento explicito nos
-  dois lados, entao sao fieis. O ponto de atencao 5 fica justamente nessa
-  fronteira: o STEP 3 (Dia 8) le `i` depois do laco e precisa de conferencia
-  linha a linha.
+  dois lados, entao sao fieis. CONFERIDO ate a linha 1153: o ponto de
+  atencao 5 era justamente essa fronteira -- o laco de lacunas (1095-1117)
+  le `i` de fora e e um `for` que nao vaza `k`, porque `k` nao e lido depois
+  dele. Falta conferir o STEP 4 (Dia 9), que tem `do k=istart,iend` e
+  `do iw=istart,iend` com `iw` em `fasst_global`.
 """
 
 import math
@@ -326,7 +355,7 @@ import numpy as np
 
 from .constants import EPS, MAXCOL, MAXL, MAXN, MOVERLAP, NCLAYERS, PI, SPFLAG, TREF
 from .indices import MetCol
-from .state import FasstState
+from .state import FasstState, _chars, _ints, _reals, _reals2
 from .functions import map_usda_soiltype_to_uscs, met_date
 from .zerovars import zero_mxl_params, zero_parameters
 from .initsurface import initsurface
@@ -478,8 +507,11 @@ def _to_char(tok, current=" ", width=1):
 def _ix(i):
     """Indice 1-based calculado exatamente como o original calcula.
 
-    Divergencia deliberada, restrita ao bloco de fusao de camadas (ponto
-    de atencao 1): o indice 0 existe aqui (slot fantasma, valor 0) e e
+    Divergencia deliberada D4, usada nos dois pontos em que o original
+    indexa com uma conta que pode dar negativo: o bloco de fusao de
+    camadas (ponto de atencao 1) e o laco de lacunas de tempo do STEP 3,
+    que indexa `metm` com o `i` que sobrou do laco anterior (ponto de
+    atencao 5). O indice 0 existe aqui (slot fantasma, valor 0) e e
     inofensivo, mas um indice NEGATIVO faria o Python pegar o fim do array
     por wraparound, enquanto o Fortran leria memoria antes do array. Os
     dois sao lixo; falhar alto e mais util do que produzir numeros
@@ -487,8 +519,10 @@ def _ix(i):
     """
     if i < 0:
         raise IndexError(
-            "indice %d < 0 no bloco de fusao de camadas (ponto de atencao 1): "
-            "com nlayers > nlayers1 + 1, `i - nlayers` fica negativo" % i
+            "indice %d < 0: no bloco de fusao de camadas (ponto de atencao "
+            "1) `i - nlayers` fica negativo com nlayers > nlayers1 + 1; no "
+            "laco de lacunas do STEP 3 (ponto de atencao 5) o `i` que sobra "
+            "do laco anterior vale -1 quando num_frq == 0" % i
         )
     return i
 
@@ -610,6 +644,70 @@ class _Unit:
 
     def close(self):
         self.f.close()
+
+
+# ---------------------------------------------------------------------------
+# allocate(...) do STEP 3 (fasst_driver.F90, linhas 1126-1148)
+# ---------------------------------------------------------------------------
+# As 34 alocaveis `real(dp)` de uma dimensao, na ordem em que o original as
+# aloca. As outras seis sao casos a parte (tipo ou forma diferentes) e estao
+# escritas uma a uma em `allocate_run_arrays`.
+_RUN_REAL_1D = (
+    "sdens",
+    "ft", "tt",
+    "surfice", "surfmoist",
+    "surficep", "surfmoistp",
+    "surfci", "surfrci",
+    "surfcbr", "surfd",
+    "frthick", "twthick",
+    "surfemis", "surfemisf",
+    "surfemisc",
+    "tot_moist",
+    "tot_thick",
+    # fluxos de energia de superficie (1140-1148)
+    "cheat", "cheat1",
+    "sdown", "sup",
+    "irdown", "irup",
+    "pheat1", "lheat",
+    "evap_heat", "sheat",
+    "melt", "tmelt",
+    "lheatf", "lhes",
+    "cevap", "ponding",
+)
+
+
+def allocate_run_arrays(state):
+    """Aloca as ~40 arrays alocaveis de `fasst_global` (linhas 1126-1148).
+
+    Todas sao dimensionadas por `state.maxlines`, que o bloco imediatamente
+    anterior no STEP 3 acabou de calcular. `fasst/state.py` as deixa em
+    `None` de proposito e delega a alocacao a quem transcreve o driver --
+    ou seja, a esta funcao (ver o comentario da secao "allocatable arrays"
+    em `state.py`).
+
+    A ORDEM IMPORTA: isto roda ANTES de `zero_mxl_params` (Fortran: 1126-1148
+    e so depois 1167/1292), que itera sobre estas arrays e precisa que elas
+    existam. As formas tambem importam -- sao elas que o slicing de
+    `zerovars.zero_mxl_params` assume.
+
+    Dois tipos fora do padrao, lidos de `fasst_global.F90`: `slushy` e
+    `integer(ip)` (linha 179) e `sstate` e `character(len=1)` (linha 191).
+    As outras 38 sao `real(dp)`.
+
+    O original passa `stat=err` nos 23 `allocate` e NUNCA le `err`: um
+    erro de alocacao passaria em silencio. Aqui nao ha o que preservar --
+    falta de memoria levanta `MemoryError` sozinho.
+    """
+    n = state.maxlines
+    for nome in _RUN_REAL_1D:
+        setattr(state, nome, _reals(n))
+
+    state.slushy = _ints(n)                      # integer(ip), nao real
+    state.sstate = _chars(n, 1)                  # character(len=1)
+    state.met = _reals2(n, MAXCOL)               # met(maxlines,maxcol)
+    state.dmet1 = _reals2(n, 13)                 # dmet1(maxlines,13)
+    state.airt = _reals2(2, n)                   # airt(2,maxlines)
+    state.canopy_temp = _reals2(NCLAYERS, n)     # canopy_temp(nclayers,maxlines)
 
 
 # ---------------------------------------------------------------------------
@@ -754,6 +852,10 @@ def main(argv=None, _state=None, _locals=None):
     t1oo = 0.0
     sdensi = 0.0
     phie = 0.0
+    # `rtstps` e o caso que IMPORTA desta lista: o original so o atribui
+    # dentro de `if(timstep > 0d0)` (linha 1092) e o le na linha seguinte
+    # sem guarda nenhuma. E o ponto de atencao 9.
+    rtstps = 0.0
 
     it = 0.0
     et = 0.0
@@ -1737,18 +1839,118 @@ def main(argv=None, _state=None, _locals=None):
         if state.mpos == 0:
             state.mpos = state.moverlapr
 
-    # ------------------------------------------------------------------
-    # A transcricao para aqui: linha 1084 do original. Falta:
-    #   STEP 3   (1086-1153) lacunas de tempo, `maxlines`, alocacao
-    #   STEP 4   (1156-1425) lacos principais
-    #   STEP 6   (1433-1480) fecha arquivos, desaloca, tempo de CPU
-    # ------------------------------------------------------------------
+    # ponytail: primeira das capturas do gancho `_locals` -- aqui,
+    # no fim do bloco de hot start (linha 1084). Ela existe porque o laco
+    # logo abaixo LEVANTA de proposito no modo multiponto com
+    # `num_frq == 0` (ponto de atencao 5 + divergencia D4): sem uma captura
+    # ANTES dele, os fixtures multiponto dos Dias 5-7 voltariam com `loc`
+    # vazio. As capturas seguintes sobrescrevem esta quando sao alcancadas.
     if _locals is not None:
         _locals.update(locals())
+        _locals["_hot"] = dict(locals())
+
+    # ---- lacunas de tempo no arquivo met (1086-1117) ----
+    # Conta quantos passos de tempo FALTAM no met, somando as lacunas entre
+    # registros consecutivos. O total (`mtsteps`) entra no dimensionamento
+    # dos arrays de execucao: `missing_met` depois preenche essas posicoes.
+    #
+    # Ponto de atencao 5, segunda metade: o laco indexa `metm` com o `i`
+    # que SOBROU do bloco anterior. No ponto unico isso e o sitio casado
+    # (`i == kk`, pelo `i = i - 1` da 1063). No multiponto `i` e o contador
+    # do laco interno da ULTIMA chamada de `read_complex`, sem relacao
+    # nenhuma com sitio de met -- e com `num_frq == 0` o laco nem roda e
+    # `i` chega aqui valendo -1. Por isso os indices passam por `_ix`
+    # (divergencia D4): em NumPy, -1 pegaria o ULTIMO sitio em silencio.
+    mtsteps = 0
+    msteps1 = 0
+    t1oo = 0e0
+    t1n = 0e0
+
+    # Ponto de atencao 9: com `timstep <= 0` o `if` nao dispara, `rtstps`
+    # fica no zero com que foi declarado (D2), `tstps` sai 0 e TODO
+    # `msteps1` sai 0 -- nenhuma lacuna e detectada e o arquivo passa como
+    # se estivesse completo.
+    if state.timstep > 0e0:
+        rtstps = 24e0 / state.timstep
+    tstps = int(rtstps)
+
+    for k in range(2, icnti + 1):
+        t1oo = met_date(metm[_ix(i), k - 1, 1], metm[_ix(i), k - 1, 2],
+                        metm[_ix(i), k - 1, 3], metm[_ix(i), k - 1, 4])
+        t1n = met_date(metm[_ix(i), k, 1], metm[_ix(i), k, 2],
+                       metm[_ix(i), k, 3], metm[_ix(i), k, 4])
+
+        # ano % 4 == 0, escrito com `aint`: o fator 367/366 abaixo sai
+        # daqui. Note que o teste e sobre o ano do registro NOVO.
+        mody = metm[_ix(i), k, 1] - _aint(metm[_ix(i), k, 1] * 2.5e-1) * 4e0
+        # Ponto de atencao 17: `modyo` e calculado e NUNCA lido. A unica
+        # linha que o usaria -- `if(mody /= modyo) daylim = 1.07d0`, 1105 --
+        # esta comentada no proprio Fortran. Transcrito para preservar o
+        # custo e o fato.
+        modyo = (metm[_ix(i), k - 1, 1]
+                 - _aint(metm[_ix(i), k - 1, 1] * 2.5e-1) * 4e0)
+
+        daylim = 1.042e0                             # `!1.003d0` no original
+        if metm[_ix(i), k - 1, 1] != metm[_ix(i), k, 1]:
+            daylim = 25.07e0                         # virada de ano
+
+        # PONTO DE ATENCAO 21: este `msteps1 = 0` (1108) e MORTO, e o
+        # da 1088 tambem. Os dois ramos logo abaixo atribuem `msteps1`
+        # incondicionalmente, e depois do laco ninguem mais o le -- so
+        # `mtsteps` sobrevive. Preservado; e o unico mutante do Dia 8 que
+        # escapa por ser provadamente equivalente.
+        #
+        # ATENCAO: a guarda compara o PRODUTO REAL com `daylim`, nao o
+        # `msteps1` truncado. Sao duas expressoes distintas e e por isso
+        # que a linha aparece duplicada: `int(x)` e `x < daylim`. O fator
+        # tem de ser o MESMO nas duas (ha fixture para isso).
+        msteps1 = 0
+        if abs(mody) <= EPS:
+            msteps1 = int((t1n - t1oo) * 367e0 * tstps)
+            if (t1n - t1oo) * 367e0 * tstps < daylim:
+                msteps1 = 0
+        else:
+            msteps1 = int((t1n - t1oo) * 366e0 * tstps)
+            if (t1n - t1oo) * 366e0 * tstps < daylim:
+                msteps1 = 0
+        # PONTO DE ATENCAO 20: `mtsteps` nao e uma contagem de registros
+        # faltantes, e uma aproximacao cujo arredondamento depende de QUAIS
+        # horas a lacuna cai entre. Com dado horario, uma lacuna de um
+        # registro da produto 1.999999974 (-> 1) em 21 dos 22 pares de
+        # horas possiveis, mas 2.000000852 (-> 2) entre 20h e 22h: o erro
+        # do ponto 16 muda de sinal. Como `maxlines` e so um limite de
+        # alocacao, o efeito e alocar uma linha a mais ou a menos.
+        mtsteps = mtsteps + msteps1
+
+    # ---- maxlines e alocacao (1119-1148) ----
+    # `maxlines` e campo de `fasst_global`, nao local: e de `state.maxlines`
+    # que `zero_mxl_params` tira o limite do zeramento.
+    if state.infer_test == 0:
+        state.maxlines = state.iend + mtsteps
+    else:
+        # A variante comentada da 1123 -- `iend + (dstart - oldpos) +
+        # mtsteps` -- nao e transcrita.
+        state.maxlines = state.iend + mtsteps + state.moverlapr + 1
+
+    allocate_run_arrays(state)
+
+    # ponytail: segunda captura, no fim do STEP 3. A do fim de `main` nao
+    # substitui esta: o STEP 4 REUSA `i`, `k`, `kk`, `j` e `tflag`, entao
+    # quem quiser verificar o que os STEPs 1-3 produziram precisa olhar
+    # aqui, antes de os lacos principais sobrescreverem.
+    if _locals is not None:
+        _locals.update(locals())
+        _locals["_step3"] = dict(locals())
+
+    # ------------------------------------------------------------------
+    # A transcricao para aqui: linha 1153 do original. Falta:
+    #   STEP 4   (1156-1425) os dois lacos principais
+    #   STEP 6   (1433-1480) fecha arquivos, desaloca, tempo de CPU
+    # ------------------------------------------------------------------
     unit4.close()
     raise NotImplementedError(
-        "transcricao de fasst_driver.F90 em andamento: parou na linha 1084 "
-        "do original (fim do bloco de hot start do STEP 3)"
+        "transcricao de fasst_driver.F90 em andamento: parou na linha 1153 "
+        "do original (fim do STEP 3)"
     )
 
     et = time.process_time()                                   # call cpu_time(et)
@@ -1901,12 +2103,12 @@ def demo():
     # Uma linha de dados met com as 32 colunas que o original le
     # (MetCol.YEAR .. MetCol.TSOIL). `hr` e parametrizada so para dar uma
     # marca distinguivel por linha.
-    def _linha_met(hr, ano=2010, prec=0.0, extra=""):
+    def _linha_met(hr, ano=2010, prec=0.0, extra="", doy=100, minuto=0):
         return (
-            "%d 100 %d 0 1013.0 25.0 50.0 3.0 180.0 %s 0 0.0 0 "
+            "%d %d %d %s 1013.0 25.0 50.0 3.0 180.0 %s 0 0.0 0 "
             "0.2 1.0 1 0.0 0.0 0 0.0 0.0 0 "
             "800.0 600.0 200.0 150.0 350.0 400.0 30.0 180.0 0.0 20.0%s\n"
-            % (ano, hr, prec, extra)
+            % (ano, doy, hr, minuto, prec, extra)
         )
 
     def _met(nome="yuma.met", cabecalho=None, corpo=None, cauda=""):
@@ -1964,8 +2166,17 @@ def demo():
     with open(os.path.join(d, "complexo.vitd"), "w") as f:
         f.write("cabecalho do arquivo complexo\n")
 
-    def _exec(linhas, met, st, loc):
-        """Escreve o `.inp`, troca para o diretorio temporario e roda `main`."""
+    def _exec(linhas, met, st, loc, tolera=()):
+        """Escreve o `.inp`, troca para o diretorio temporario e roda `main`.
+
+        `tolera` lista tipos de excecao a engolir ALEM de
+        `NotImplementedError`. Serve para um unico caso: o ponto de atencao
+        5 faz o laco de lacunas do STEP 3 indexar `metm` com `i == -1` no
+        modo multiponto com `num_frq == 0`, e `_ix` (divergencia D4)
+        levanta `IndexError` ali de proposito. Nao esta no `except` padrao
+        porque esse `IndexError` E o sinal que D4 existe para dar -- quem
+        quiser atravessa-lo tem de pedir explicitamente.
+        """
         import contextlib
         import io as _io
         caminho = os.path.join(d, "caso.inp")
@@ -1980,16 +2191,18 @@ def demo():
                     main(["fasst_driver", caminho], _state=st, _locals=loc)
                 except NotImplementedError:
                     pass                   # parou no marcador da transcricao
+                except tolera:
+                    pass
         finally:
             os.chdir(antes)
         return saida.getvalue()
 
-    def _run(linhas, met=None):
+    def _run(linhas, met=None, tolera=()):
         """Roda `main` ate onde a transcricao chegou e devolve (estado, saida)."""
         st = FasstState()
-        return st, _exec(linhas, met, st, None)
+        return st, _exec(linhas, met, st, None, tolera)
 
-    def _run_loc(linhas, met=None):
+    def _run_loc(linhas, met=None, tolera=()):
         """Como `_run`, mas tambem devolve as variaveis LOCAIS de `main`.
 
         Metade do que os STEPs 1 e 2 produzem (`icnti`, `metm`, `latm`,
@@ -1997,12 +2210,15 @@ def demo():
         locais do `program`, nao campos de `FasstState` -- sem isto ficariam
         sem verificacao nenhuma.
 
-        ATENCAO: a captura acontece no marcador de fim da transcricao. Se um
-        stub levantar antes (e `read_complex` levanta, no modo multiponto),
-        `loc` volta VAZIO -- nesse caso usar `_run` e checar so o estado.
+        Ha DUAS capturas em `main`: uma no fim do STEP 3 e outra no
+        marcador de fim da transcricao. A segunda sobrescreve a primeira,
+        entao o que volta aqui e o estado mais avancado que a execucao
+        alcancou. Se um stub levantar antes das duas (e `read_complex`
+        levanta, no modo multiponto), `loc` volta VAZIO -- nesse caso usar
+        `_run` e checar so o estado.
         """
         st, loc = FasstState(), {}
-        _exec(linhas, met, st, loc)
+        _exec(linhas, met, st, loc, tolera)
         return st, loc
 
     _CABECALHO = (
@@ -2391,7 +2607,7 @@ def demo():
     # consumidos e que o STEP 1 terminou. Vira verificavel no Dia 7,
     # quando essas unidades forem abertas.
     st, _ = _run("@MET@ !\n0 1 0.5 1 !\n1.5 0.0 1 1 0 100 0 !\n"
-                 "complexo.vitd !\nmeusolo.inp !\n")
+                 "complexo.vitd !\nmeusolo.inp !\n", tolera=(IndexError,))
     assert st.single_multi_flag == 1 and st.vitd_index == 0
 
     # `single_multi_flag` invalido: o `else` da linha 693 so imprime, sem
@@ -2647,7 +2863,11 @@ def demo():
     # ramo multiponto: agora da para ver os dois nomes lidos
     _MULTI = ("@MET@ !\n0 1 0.5 1 !\n1.5 0.0 1 1 0 100 0 !\n"
               "complexo.vitd !\nmeusolo.inp !\n")
-    st, loc = _run_loc(_MULTI)
+    # `tolera=(IndexError,)`: ver o ponto de atencao 5 mais abaixo -- com
+    # `num_frq == 0` o laco de lacunas do STEP 3 indexa `metm` com -1 e
+    # `_ix` levanta. A captura do fim do hot start ja aconteceu, entao
+    # `loc` vem preenchido.
+    st, loc = _run_loc(_MULTI, tolera=(IndexError,))
     assert loc["vitd_input"] == "complexo.vitd"
     assert loc["fasstusersoil"] == "meusolo.inp"
 
@@ -2761,7 +2981,7 @@ def demo():
     # ---- multiponto: unidade 5 e os nomes de saida derivados do met ----
     # `complexo.vitd` tem uma linha so, entao `num_frq` sai 0 e o laco de
     # `read_complex` nao roda -- da para atravessar o STEP 3 inteiro.
-    st, loc = _run_loc(_MULTI)
+    st, loc = _run_loc(_MULTI, tolera=(IndexError,))
     assert st.unit5 is not None
     assert loc["num_frq"] == 0
     base = loc["met_file_name"][:loc["npos"]]
@@ -2778,6 +2998,16 @@ def demo():
     # indice NEGATIVO, que o Dia 8 vai usar para indexar `metm`.
     assert loc["i"] == -1 and loc["kk"] == 0
     assert loc["tflag"] == 0        # nenhum casamento, e aqui nao ha `stop`
+    # ...e e com esse -1 que o laco de lacunas (1095-1099) indexa `metm`.
+    # Em NumPy -1 pegaria o ULTIMO sitio em silencio; `_ix` levanta
+    # (divergencia D4). Este e o unico lugar em que o demo pede
+    # `tolera=(IndexError,)`, e e o que prova que D4 esta ativa.
+    try:
+        _exec(_MULTI, None, FasstState(), None)
+    except IndexError as e:
+        assert "ponto de atencao 5" in str(e)
+    else:
+        raise AssertionError("esperado IndexError no laco de lacunas")
 
     # com mais de uma linha no complexo, `read_complex` e chamada e levanta
     vitd3 = os.path.join(d, "tres.vitd")
@@ -2877,7 +3107,9 @@ def demo():
     # sitio casado (`metm(kk,1,1..4)`), que e 2010/100 12:00
     assert [loc["t1o"][k] for k in (1, 2, 3, 4)] == [
         met_date(2010.0, 100.0, h, 0.0) for h in (10.0, 11.0, 13.0, 14.0)]
-    assert loc["t1n"] == met_date(
+    # `loc["_hot"]`, nao `loc`: o laco de lacunas logo abaixo reescreve
+    # `t1n` (e `t1oo`) com o par de datas da ULTIMA volta dele.
+    assert loc["_hot"]["t1n"] == met_date(
         *(loc["metm"][loc["kk"], 1, c] for c in (1, 2, 3, 4)))
     # a busca de `mpos`: o ultimo k com t1o[k] < t1n <= t1o[k+1].
     # 11h < 12h <= 13h -> k = 2.
@@ -2922,14 +3154,266 @@ def demo():
     met23 = _met("hot23.met",
                  corpo="".join(_linha_met(h) for h in (23, 0, 1)))
     st, loc, _ = _hot(tuple(range(1, MOVERLAP + 1)), met=met23)
-    assert loc["t1n"] == met_date(2010.0, 100.0, 23.0, 0.0)
-    assert loc["t1o"][MOVERLAP] < loc["t1n"]     # a condicao NAO curto-circuita
+    assert loc["_hot"]["t1n"] == met_date(2010.0, 100.0, 23.0, 0.0)
+    assert loc["t1o"][MOVERLAP] < loc["_hot"]["t1n"]   # NAO curto-circuita
     assert st.mpos == st.moverlapr == MOVERLAP
 
     # `freq_id = fdi` (linha 1067): no ponto unico e ida e volta, mas o
     # valor tem de chegar inteiro -- `zero_parameters` o deixa em 1.
     st, loc, _ = _hot((10, 11, 13, 14))
     assert loc["fdi"] == 1 and st.freq_id == 1
+
+    # ---- STEP 3: lacunas de tempo, maxlines e alocacao (1086-1153) ----
+
+    # Um met com as horas que a lista pedir, e o `.inp` de terra firme
+    # correspondente. `timstep` sai do cabecalho global do met.
+    def _lacunas(horas, timstep=1.0, ano=2010, doys=None, minutos=None):
+        nome = "gap%d.met" % len(_feitos)
+        _feitos.append(nome)
+        if doys is None:
+            doys = [100] * len(horas)
+        if minutos is None:
+            minutos = [0] * len(horas)
+        cab = ("%d 32 32.5 -114.0 50.0 1234 1 -7.0 %g -999.0 2.0"
+               % (len(horas), timstep))
+        anos = ano if isinstance(ano, (list, tuple)) else [ano] * len(horas)
+        corpo = "".join(_linha_met(h, ano=a, doy=dd, minuto=mm)
+                        for h, a, dd, mm in zip(horas, anos, doys, minutos))
+        met = _met(nome, cabecalho=cab, corpo=corpo)
+        return _run_loc(_LAND, met=met)
+
+    _feitos = []
+
+    # sem lacuna: tres horas consecutivas -> mtsteps = 0
+    st, loc = _lacunas((12, 13, 14))
+    assert loc["tstps"] == 24 and loc["rtstps"] == 24.0   # 24 / timstep
+    assert loc["mtsteps"] == 0
+    assert st.iend == 3 and st.maxlines == 3               # iend + mtsteps
+    # `daylim` da ultima volta: todas as voltas ficaram no mesmo ano
+    assert loc["daylim"] == 1.042e0
+
+    # uma hora faltando (12, 14, 15). O produto da primeira volta e
+    # 1.999999974 -- logo ABAIXO de 2 por causa do ponto 16 -- e o
+    # `int()` o trunca para 1, que por sorte e o numero certo de
+    # registros faltantes.
+    st, loc = _lacunas((12, 14, 15))
+    assert loc["mtsteps"] == 1 and st.maxlines == st.iend + 1 == 4
+
+    # ...mas o acerto E sorte: entre 20h e 22h o erro do ponto 16 muda de
+    # sinal (produto = 2.000000852) e a MESMA lacuna de um registro conta
+    # 2. Ou seja `mtsteps` depende de QUAIS horas a lacuna cai entre.
+    st, loc = _lacunas((20, 22, 23))
+    assert loc["mtsteps"] == 2 and st.maxlines == 5
+
+    # lacuna de tres horas: produto 3.999999945 -> 3
+    st, loc = _lacunas((12, 16, 17))
+    assert loc["mtsteps"] == 3 and st.maxlines == 6
+
+    # PONTO DE ATENCAO 9: `timstep <= 0` deixa `rtstps` no zero da
+    # declaracao (o `if` da 1092 nao dispara), `tstps` sai 0 e todo
+    # produto sai 0 -- a lacuna de tres horas NAO e detectada.
+    st, loc = _lacunas((12, 16, 17), timstep=0.0)
+    assert loc["rtstps"] == 0.0 and loc["tstps"] == 0
+    assert loc["mtsteps"] == 0 and st.maxlines == st.iend
+    st, loc = _lacunas((12, 16, 17), timstep=-1.0)
+    assert loc["tstps"] == 0 and loc["mtsteps"] == 0
+
+    # virada de ano: `daylim` sobe de 1.042 para 25.07 (linha 1106).
+    # Entre 2010/365 23h e 2011/001 00h o produto e 25.000000099 --
+    # porque `met_date` divide o dia-do-ano por 366, nao por 365 -- e
+    # fica logo ABAIXO de 25.07, entao a virada normal nao conta lacuna.
+    st, loc = _lacunas((23, 0, 1), ano=(2010, 2011, 2011),
+                       doys=(365, 1, 1))
+    assert loc["daylim"] == 1.042e0        # ultima volta: ja no mesmo ano
+    assert loc["mtsteps"] == 0
+    # uma hora faltando NA virada passa de 25.07 e conta 25 -- o vies de
+    # +24 embutido no 366 vai inteiro para `maxlines`.
+    st, loc = _lacunas((22, 0, 1), ano=(2010, 2011, 2011),
+                       doys=(365, 1, 1))
+    assert loc["mtsteps"] == 25 and st.maxlines == st.iend + 25
+
+    # PONTO DE ATENCAO 19 (novo): o ramo bissexto (fator 367) e
+    # INALCANCAVEL para qualquer ano real. `mody` e calculado sobre o ano
+    # JA QUANTIZADO pelo ponto 16, e `anint(2012*1d15)*1d-15` devolve
+    # 2012.0000000000002274 -> `mody` = 2.27e-13, muito acima de
+    # `eps` = 2.22e-16. Logo 2012 cai no ramo 366, igual a 2010.
+    st, loc = _lacunas((20, 22, 23), ano=2012)
+    assert loc["mody"] != 0.0 and abs(loc["mody"]) > EPS
+    assert loc["mtsteps"] == 2                 # identico ao caso de 2010
+    # Os unicos anos que passam o teste sao os multiplos de 4 pequenos o
+    # suficiente para `ano*1d15` caber exato num double (< 2**53): 0, 4,
+    # 8 e 16 -- note que 12 NAO passa (1.78e-15 > eps). Com ano 4 o ramo
+    # 367 fica alcancavel, e entre 10h e 12h ele MUDA o resultado: o
+    # produto e 2.000000851 com 367 e 1.994551258 com 366.
+    st, loc = _lacunas((10, 12, 13), ano=4)
+    assert loc["mody"] == 0.0
+    assert loc["mtsteps"] == 2                 # com 366 daria 1
+    # `modyo` (ponto de atencao 17) e calculado e nunca lido: aqui o ano
+    # anterior e o mesmo, entao ele acaba valendo o mesmo que `mody`.
+    assert loc["modyo"] == loc["mody"]
+
+    # `maxlines` no hot start (1122): ganha `moverlapr + 1`. O `_hot` usa
+    # `read_old_data` postico, que e quem escreve `moverlapr`.
+    st, loc, _ = _hot((10, 11, 13, 14))
+    assert st.moverlapr == 4
+    assert st.infer_test == 1
+    assert st.maxlines == st.iend + loc["mtsteps"] + st.moverlapr + 1
+
+    # ---- a alocacao (1126-1148) ----
+    # As formas tem de ser exatamente as que o slicing de
+    # `zero_mxl_params` assume -- e a prova e preencher tudo com valor
+    # nao-nulo, chamar `zero_mxl_params` e conferir os zeros.
+    st, loc = _lacunas((12, 14, 15))
+    n = st.maxlines
+    assert n == 4
+    for nome in _RUN_REAL_1D:
+        a = getattr(st, nome)
+        assert a is not None and a.shape == (n + 1,), nome
+        assert a.dtype == np.float64, nome
+    assert st.slushy.shape == (n + 1,) and st.slushy.dtype == np.int64
+    assert st.sstate.shape == (n + 1,) and st.sstate.dtype.kind == "U"
+    assert st.met.shape == (n + 1, MAXCOL + 1)
+    assert st.dmet1.shape == (n + 1, 14)
+    assert st.airt.shape == (3, n + 1)
+    assert st.canopy_temp.shape == (NCLAYERS + 1, n + 1)
+    # os 40 nomes de `_ALLOCATABLE_FIELDS` que nao sao unidades: nenhum
+    # pode ter ficado em None
+    from .state import _ALLOCATABLE_FIELDS, _UNIT_FIELDS
+    for nome in _ALLOCATABLE_FIELDS - _UNIT_FIELDS:
+        assert getattr(st, nome) is not None, nome
+
+    # ordem obrigatoria: alocar ANTES de `zero_mxl_params`, que itera
+    # sobre estas arrays. Preenche com lixo e confere o zeramento.
+    for nome in _RUN_REAL_1D:
+        getattr(st, nome)[:] = 7.5
+    st.met[:, :] = 7.5
+    st.dmet1[:, :] = 7.5
+    st.airt[:, :] = 7.5
+    st.canopy_temp[:, :] = 7.5
+    st.sstate[:] = "x"
+    zero_mxl_params(st)
+    for nome in _RUN_REAL_1D:
+        assert not getattr(st, nome)[1:n + 1].any(), nome
+    assert not st.met[1:n + 1, 1:MAXCOL + 1].any()
+    assert not st.airt[1:3, 1:n + 1].any()
+    assert not st.canopy_temp[1:NCLAYERS + 1, 1:n + 1].any()
+    assert list(st.sstate[1:n + 1]) == [""] * n
+    # ponto 2 de `zero_mxl_params`: as colunas 11..13 de `dmet1` NAO sao
+    # zeradas -- preservado, e so observavel porque a alocacao as criou
+    assert not st.dmet1[1:n + 1, 1:11].any()
+    assert (st.dmet1[1:n + 1, 11:14] == 7.5).all()
+    # e `slushy` nao e tocado (ponto 9 de `zero_mxl_params`)
+    assert (st.slushy == 0).all()
+
+    # ---- multiponto COM registros: `read_complex` postico ----
+    # Todo fixture multiponto acima tem `num_frq == 0`, que e justamente
+    # o caso degenerado do ponto de atencao 5. Com um `read_complex`
+    # postico o laco de registros VITD roda de verdade, `i` termina no
+    # sitio casado e o laco de lacunas indexa `metm` com indice valido.
+    _rc_real = globals()["read_complex"]
+
+    def _multi(nlinhas, met=None):
+        """Roda o multiponto com N linhas no `.vitd` e read_complex falso.
+
+        `num_frq` sai `N - 1` (ver o ponto de atencao 5 acima), entao o
+        laco chama o postico `N - 1` vezes.
+        """
+        import inspect
+        chamadas = []
+
+        def _falso(state_, wtype_, io_, lcount_, nm0_, wvel_, wdepth_,
+                   mtest_, sname_):
+            # `bind` contra a assinatura REAL: sem isto o postico
+            # esconderia um erro de aridade na chamada do driver.
+            inspect.signature(_rc_real).bind(
+                state_, wtype_, io_, lcount_, nm0_, wvel_, wdepth_,
+                mtest_, sname_)
+            chamadas.append(state_.freq_id)
+            # o real le UM registro VITD e escreve estes dois campos
+            state_.vitd_index = 1234          # = pindex do met do fixture
+            state_.freq_id = 10 * len(chamadas)
+            return (wtype_, 0, lcount_, nm0_, wvel_, wdepth_, mtest_,
+                    sname_)
+
+        nome = "multi%d.vitd" % nlinhas
+        with open(os.path.join(d, nome), "w") as f:
+            f.write("cabecalho do arquivo complexo\n")
+            for kk_ in range(nlinhas - 1):
+                f.write("registro %d\n" % (kk_ + 1))
+        st_, loc_ = FasstState(), {}
+        globals()["read_complex"] = _falso
+        try:
+            _exec(_MULTI.replace("complexo.vitd", nome), met, st_, loc_)
+        finally:
+            globals()["read_complex"] = _rc_real
+        return st_, loc_, chamadas
+
+    # 3 linhas -> num_frq = 2 -> duas chamadas
+    st, loc, chamadas = _multi(3)
+    assert loc["num_frq"] == 2 and len(chamadas) == 2
+    # `fdi = freq_id` so na PRIMEIRA volta (`if j == 1`, linha 1047): o
+    # postico poe 10 na 1a chamada e 20 na 2a, e `fdi` fica com o 10.
+    assert loc["fdi"] == 10 and st.freq_id == 20
+    # o casamento aconteceu, e agora `i` SAI valendo o sitio casado --
+    # ao contrario do caso `num_frq == 0`, em que ele vale -1
+    assert loc["tflag"] == 1 and loc["kk"] == 1 and loc["i"] == 1
+    # e por isso o laco de lacunas rodou sobre o sitio de verdade
+    assert loc["mtsteps"] == 0 and st.maxlines == st.iend == 3
+    # a unidade 5 voltou ao topo depois do laco (`rewind(5)`, linha 1053)
+    assert st.unit5 is not None
+
+    # uma lacuna no met, agora pelo caminho multiponto
+    cab = "3 32 32.5 -114.0 50.0 1234 1 -7.0 1.0 -999.0 2.0"
+    met_gap = _met("multigap.met", cabecalho=cab,
+                   corpo="".join(_linha_met(h) for h in (12, 14, 15)))
+    st, loc, chamadas = _multi(3, met=met_gap)
+    assert loc["mtsteps"] == 1 and st.maxlines == 4
+
+    # 2 linhas -> num_frq = 1 -> uma chamada, e `fdi` e o unico freq_id
+    st, loc, chamadas = _multi(2)
+    assert loc["num_frq"] == 1 and len(chamadas) == 1
+    assert loc["fdi"] == 10 and st.freq_id == 10
+
+    # ---- quatro cenarios que a 1a rodada de mutacao do Dia 8 pediu ----
+
+    # (1) `tstps = int(rtstps)`, nao `nint`/`round`. Com os timsteps
+    #     usuais (1, 3) o quociente 24/timstep e inteiro e os dois dao o
+    #     mesmo. Com `timstep = 9` da 2.666...: `int` deixa 2, `round`
+    #     deixaria 3 -- e com tstps = 3 a lacuna de 9 horas passaria a
+    #     ser detectada (mtsteps = 2).
+    st, loc = _lacunas((12, 21, 30), timstep=9.0)
+    assert loc["rtstps"] == 24e0 / 9e0 and loc["tstps"] == 2
+    assert loc["mtsteps"] == 0 and st.maxlines == st.iend
+
+    # (2) `mody` sai do ano do registro NOVO (k), nao do anterior (k-1).
+    #     So e observavel quando os dois anos caem em ramos diferentes, e
+    #     pelo ponto 19 isso exige anos pequenos: 4 -> 5. O ano 4 da
+    #     mody = 0 (ramo 367) e o 5 da mody = 1 (ramo 366).
+    st, loc = _lacunas((12, 0, 1), ano=(4, 5, 5), doys=(365, 1, 1))
+    assert loc["mody"] == 1.0                 # ultima volta, ano 5
+    assert loc["mtsteps"] == 59                # com mody de k-1 daria 60
+
+    # (3) O fator da GUARDA e o mesmo do `int()` -- a expressao aparece
+    #     duplicada no original, e as duas copias tem de usar o MESMO
+    #     fator. Com 1h02.4min entre dois registros o produto da 1.0400
+    #     com 366 (abaixo de daylim = 1.042, nao conta lacuna) e 1.0428
+    #     com 367 (acima, contaria). A coluna de minutos e lida como
+    #     real, entao 2.4 passa.
+    st, loc = _lacunas((12, 13, 14), minutos=(0, 2.4, 2.4))
+    assert loc["mtsteps"] == 0           # com a guarda em 367 daria 1
+    #     e o espelho, no ramo bissexto: ano 4 com 1h02.6min da 1.04333
+    #     com 367 (acima de daylim, conta 1) e 1.04050 com 366 (abaixo).
+    st, loc = _lacunas((12, 13, 14), ano=4, minutos=(0, 2.6, 2.6))
+    assert loc["mody"] == 0.0 and loc["mtsteps"] == 1
+
+    # (4) `maxlines` do hot start soma os TRES termos. Com o met padrao
+    #     `mtsteps` e 0 e o termo desaparece; com uma lacuna ele aparece.
+    cab_hot = "3 32 32.5 -114.0 50.0 1234 1 -7.0 1.0 -999.0 2.0"
+    met_hot_gap = _met("hotgap.met", cabecalho=cab_hot,
+                       corpo="".join(_linha_met(h) for h in (12, 14, 15)))
+    st, loc, _ = _hot((10, 11, 13, 14), met=met_hot_gap)
+    assert loc["mtsteps"] == 1 and st.moverlapr == 4
+    assert st.maxlines == st.iend + 1 + 4 + 1
 
     print("demo OK")
 
