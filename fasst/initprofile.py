@@ -143,7 +143,8 @@ def _read_soil_record(state):
         return None
     sid = int(float(parts[0]))
     ssname = parts[1]
-    vals = [float(x) for x in parts[2:16]]
+    # A tabela real usa o expoente `d` do Fortran (`1.947d0`, `1.1197d-2`).
+    vals = [float(x.replace("d", "e").replace("D", "e")) for x in parts[2:16]]
     (dens, pors, ssemis, ssalb, shc, smin, smax, salpha, svgn,
      sspheat, sorgan, spsand, spsilt, spclay) = vals
     return (sid, ssname, dens, pors, ssemis, ssalb, shc, smin, smax,

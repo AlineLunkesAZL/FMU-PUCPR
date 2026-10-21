@@ -2,3 +2,4 @@ __pycache__/
 *.pyc
 .claude/
 NOTAS-fasst_driver.md
+cmp_fortran_agua.py

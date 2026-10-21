@@ -40,8 +40,8 @@ estado -- tudo preservado:
 Arquivos de saida: seguindo a convencao dos demais modulos
 (`initsurface.py` usa `state.unit3`, `state.unit55` etc.), as unidades
 sao objetos tipo-arquivo em `state.unit2`, `state.unit28` e
-`state.unit24`, que recebem `.write(str)`. A convencao de nomes ainda
-nao foi confirmada contra o codigo do driver (pendente).
+`state.unit24`, que recebem `.write(str)` -- os mesmos campos que o
+driver abre no STEP 3.
 
 Escrita formatada
 -------------------

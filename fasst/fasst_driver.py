@@ -156,11 +156,12 @@ Nota: `moverlapr` nao e zerado por ninguem -- nem pelo STEP 0, nem por
 
 Divergencias deliberadas
 --------------------------
-* `status='unknown'` nos 15 `open` do original significa "crie o arquivo
+* `status='unknown'` nos 18 `open` do original significa "crie o arquivo
   se nao existir". Ou seja: abrir um `fassti.inp` inexistente NAO falha no
   Fortran -- cria um arquivo vazio, e so entao o `read` seguinte morre com
   erro de runtime nao tratado (a linha 233 nao tem `iostat=`). Isso torna
-  praticamente mortos os 15 ramos "Error opening ..." do original. Aqui os
+  praticamente mortos os 13 ramos "Error opening ..." do original (13 dos
+  18 `open` conferem `iostat`). Aqui os
   arquivos de ENTRADA sao abertos para leitura e a falha cai justamente no
   ramo de erro do Fortran, com a mesma mensagem: um arquivo de entrada
   que falta e um erro, nao um arquivo vazio recem-criado. Os arquivos de
@@ -2741,9 +2742,7 @@ def demo():
     # STEP 3 abre por nome fixo sao stubs VAZIOS aqui. Com a tabela vazia,
     # `soilp(8)` e `soilp(9)` saem iguais e `initprofile` PARA o programa
     # (`initprofile.py:337`). Reproduzir as tabelas seria testar
-    # `initprofile`, nao o driver -- e as tabelas reais usam notacao `d0`
-    # do Fortran, que `_read_soil_record` ainda nao converte (pendencia
-    # daquele modulo, nao deste).
+    # `initprofile`, nao o driver.
     #
     # Cada postico confere a aridade contra a assinatura REAL com
     # `inspect.signature(...).bind(...)`: sem isso o patch esconderia
