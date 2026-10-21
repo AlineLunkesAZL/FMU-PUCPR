@@ -24,8 +24,12 @@ Indexing: 1-based Fortran arrays are represented with one unused "phantom"
 slot at index 0 (see :mod:`fasst.indices` docstring and doc point 2b) so
 that ``arr(j)`` in Fortran reads as ``arr[j]`` in Python without an offset.
 The sole exception is ``avect``, which is declared ``avect(0:4, nclayers)``
-in Fortran -- i.e. it is *already* 0-based in the original source, so it is
-given no phantom offset here (see doc point 8).
+in Fortran -- its FIRST dimension is *already* 0-based in the original
+source, so that dimension gets no phantom offset here (see doc point 8).
+The second dimension is an ordinary 1-based ``1:nclayers`` and keeps the
+phantom slot like every other array: shape ``(5, NCLAYERS + 1)``.
+(It used to be ``(5, NCLAYERS)``, which made ``avect(i, nclayers)`` -- read
+by ``module_canopy`` and ``read_old_data`` -- an IndexError.)
 
 Fixed-width character arrays (``stype``, ``node_type``, ``sclass``,
 ``nclass``, and the scalar ``meltfl``) are transcribed as NumPy fixed-width
@@ -213,8 +217,8 @@ class FasstState:
     storcs: np.ndarray = field(default_factory=lambda: _reals(NCLAYERS))
     idzveg: np.ndarray = field(default_factory=lambda: _reals(NCLAYERS))
     stor: np.ndarray = field(default_factory=lambda: _reals(NCLAYERS + NCLAYERS))
-    # avect(0:4, nclayers): already 0-based in Fortran -- NO phantom offset (see module docstring)
-    avect: np.ndarray = field(default_factory=lambda: np.zeros((5, NCLAYERS), dtype=np.float64))
+    # avect(0:4, nclayers): 1st dim already 0-based in Fortran (no phantom); 2nd is 1-based (phantom slot 0)
+    avect: np.ndarray = field(default_factory=lambda: np.zeros((5, NCLAYERS + 1), dtype=np.float64))
 
     # -- calculation variables (lines 153-158) -------------------------------
     iw: int = 0

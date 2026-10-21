@@ -570,7 +570,7 @@ def low_veg_prop(state: FasstState, fatemp: float, c3_hgt: float):
             state.hfol = state.ihfol
 
         state.hfol_tot = state.hfol * 0.01
-        if state.iw != 0:
+        if state.iw != 1:   # `iw` e 1-based (era `!= 0`, como se fosse 0-based)
             state.hfol_tot = 0.5 * (state.hfol_tot + hfoltot_old)
         state.hfol_tot = _anint(state.hfol_tot, 20)
 
@@ -579,7 +579,7 @@ def low_veg_prop(state: FasstState, fatemp: float, c3_hgt: float):
         if state.iheightn <= state.hfol:
             state.hfol = state.iheightn * 0.5
 
-        if state.iw >= 1:
+        if state.iw >= 2:   # idem (era `>= 1`, que lia a linha 0 fantasma)
             if abs(state.met[state.iw - 1, MetCol.SD] + state.met[state.iw - 1, MetCol.HI]) < EPS:
                 state.hfol = 0.5 * (state.hfol + hfol_old)
 
