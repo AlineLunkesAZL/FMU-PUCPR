@@ -77,10 +77,17 @@ EM ANDAMENTO (cronograma de 10 dias uteis).
   Dia 7  STEP 3 -- as 16 unidades de arquivo, os cabecalhos das
          saidas e o bloco de hot start (825-1084)
   Dia 8  STEP 3 -- lacunas de tempo, `maxlines`, `allocate_run_arrays`
-         (1086-1153)  <-- aqui
-`main()` levanta `NotImplementedError` no ponto exato onde a transcricao
-para, de modo que o que ja existe e executavel e verificavel (ver
-`demo()`).
+         (1086-1153)
+  Dia 9  STEP 4 -- os dois lacos principais de calculo; STEP 6 -- fecha
+         arquivos e imprime o tempo de CPU (1156-1480)  <-- aqui
+  Dia 10 `docs/doc-transcricao-fasst_driver.docx`
+
+O `program` esta TRANSCRITO DE PONTA A PONTA: `main()` roda do primeiro
+registro de `fassti.inp` ao `stop` da linha 1479. O que falta nao e mais
+texto do `.F90` deste arquivo -- sao as 5 sub-rotinas externas abaixo, que
+continuam stubs. `demo()` as substitui por posticos que conferem a aridade
+contra a assinatura real e registram cada chamada, e e assim que os dois
+lacos do STEP 4 ficam observaveis sem elas.
 
 Dependencias externas
 -----------------------
@@ -242,11 +249,24 @@ correspondente do codigo, conforme for preenchido.
     sitio casado; no multiponto e um contador de linhas da unidade 5, sem
     relacao nenhuma. Python vai acidentalmente consertar OU acidentalmente
     quebrar isso (ver "Arquitetura": e por isso que `main` e um escopo so).
-6.  STEP 4: os dois ramos sao ~90% iguais e NAO sao identicos. Linha 1185:
-    `met(k,ip_upsol)-met(k,ip_tsol) > eps`; linha 1324:
-    `met(k,ip_upsol) > met(k,ip_tsol)`. Linha 1275 usa `i <= met_count`;
-    linha 1418 usa `i >= met_count`. NAO fatorar os dois ramos num helper
-    comum: e exatamente esse diff que uma fatoracao destroi.
+6.  STEP 4: os dois ramos sao ~90% iguais e NAO sao identicos. A lista
+    abaixo nao e impressao de leitura: saiu de `diff` sobre os dois
+    trechos (1158-1278 e 1297-1422) com a indentacao e as linhas de
+    continuacao removidas. Descontado o reposicionamento de `&`, que nao
+    muda semantica, sobram CINCO diferencas:
+      (a) a mensagem `' Running case'` (1300) existe so no multiponto;
+      (b) o `stflag = 1` da 1304 existe so no multiponto -- ponto 25;
+      (c) `call zero_mxl_params` esta DENTRO do casamento no ponto unico
+          (1167) e FORA no multiponto (1291, por registro, antes de
+          `read_complex`);
+      (d) o teste de `upsol`: 1185 `met(k,ip_upsol)-met(k,ip_tsol) > eps`
+          contra 1324 `met(k,ip_upsol) > met(k,ip_tsol)` -- nao
+          observavel, ver ponto 22;
+      (e) o reporte final: 1275 `i <= met_count` contra 1418
+          `i >= met_count`, a 1418 com um `.and.vitd_index /= 0` a mais e
+          com `freq_id` no formato -- ver ponto 18.
+    NAO fatorar os dois ramos num helper comum: e exatamente esse diff
+    que uma fatoracao destroi.
 7.  Reporte de erro morto no multiponto. As linhas 1220 e 1358 tem a mesma
     guarda `if(error_code == 1.and.single_multi_flag == 0)`, mas a 1358
     esta DENTRO do ramo `single_multi_flag == 1` -- nunca dispara.
@@ -317,6 +337,57 @@ correspondente do codigo, conforme for preenchido.
     registro, porque `index` devolve 0 e `0-1 = -1`. A linha 878
     (`fasstusersoil = 'fasstusersoil.inp'` quando `lcount == 0`) existe
     justamente para consertar esse efeito. Ver `_strip_comment`.
+18. O reporte " Not finding met data" do ramo de ponto unico (linha 1275) e
+    MORTO, por dois motivos independentes. (a) A condicao e
+    autocontraditoria: o `do while` acima so sai com `tflag == 0` quando
+    `i > met_count`, e nesse ponto `i <= met_count` e falso. (b) Mesmo que
+    a condicao fosse alcancavel, o STEP 3 (linha 1061) ja PAROU o programa
+    com a mesma busca falhando, entao o fluxo nunca chega aqui. E a
+    consequencia do diff registrado no ponto 6: a gemea do multiponto
+    (1418) usa `i >= met_count`, que o `do while` satisfaz sempre, e por
+    isso dispara de verdade. O irmao de fato alcancavel deste par e o
+    reporte de `error_code` da 1220 -- mesma guarda `single_multi_flag == 0`
+    da 1358, mas no ramo em que ela e verdadeira (ver ponto 7).
+22. A diferenca de `upsol` entre os dois ramos do ponto 6 --
+    `upsol - tsol > eps` (1185) contra `upsol > tsol` (1324) -- NAO e
+    observavel. Para os dois discordarem seria preciso
+    `0 < upsol - tsol <= eps` com `upsol >= eps`, e a quantizacao do ponto
+    16 (`anint(x*1d15)*1d-15`) deixa todo valor vindo do arquivo num
+    multiplo de ~1e-15: a menor distancia possivel entre dois valores
+    lidos e ~1e-15, sete ordens de grandeza acima de `eps = 2.22e-16`.
+    Registrado porque e mais uma razao para NAO fatorar os dois ramos: a
+    fatoracao destruiria um diff cuja equivalencia depende da
+    quantizacao, nao da logica. (O ponto 25 tambem nao muda saida, mas
+    por outro motivo -- `stflag` e variavel morta.)
+23. RETIRADO. Dizia que o `iend = iendi` da 1288 era restauro inocuo,
+    por eu ter varrido `iend` so dentro de `fasst_driver.F90`. Esta
+    ERRADO: `missing_met.F90:257,654` escrevem o `iend` GLOBAL, e quem as
+    chama e `initsurface`/`initwater`, as duas dentro do corpo daquele
+    laco -- logo o restauro e NECESSARIO. O numero fica reservado para
+    nao ser reusado. Ver o comentario na propria linha.
+24. O ramo de agua do STEP 4 (`water_flag == 3`) e um hot start sao
+    MUTUAMENTE EXCLUSIVOS **no modo de ponto unico**, logo o
+    `do iw=istart,iend` da linha 1263 roda sempre com `istart == 1`. A
+    prova tem duas metades: `istart = 2` acontece unicamente sob
+    `infer_test == 1` (253-255), e neste modo `water_flag = 3` e atribuido
+    so em 448 e 508 -- as duas dentro do bloco 388-669, que esta todo sob
+    `infer_test == 0`. (A 558 atribui 1, nao 3.) NAO vale para o ramo
+    multiponto, e a diferenca importa: la o `water_flag = 3` pode vir de
+    `read_complex.F90:167` (`vegl_type == 15`, UMD ocean), que nao olha
+    `infer_test`, entao o laco de 1406 e codigo VIVO e pode rodar com
+    `istart == 2`. Quem transcrever `open_water` precisa tratar o
+    deslocamento de uma linha que o hot start causa no `metm` -- so nao
+    pelo caminho de ponto unico.
+25. O QUARTO diff dos dois ramos do STEP 4 (ponto 6): o multiponto tem um
+    `stflag = 1` na linha 1304, antes dos lacos, e o ramo de ponto unico
+    NAO tem o equivalente -- 1162-1165 atribui so `tflag`, `lat` e
+    `mlong`. Como o outro `stflag = 1` de cada ramo (1235 e 1378) esta
+    dentro de `water_flag <= 2`, a diferenca e observavel exatamente no
+    ramo de AGUA: ali o multiponto sai com `stflag == 1` e o ponto unico
+    com 0. Em si `stflag` e variavel MORTA -- o unico leitor e a linha
+    1453, comentada no proprio Fortran, como o `modyo` do ponto 17 --
+    entao o desvio nao muda saida nenhuma. Registrado porque e mais um
+    diff que uma fatoracao dos dois ramos destruiria em silencio.
 
 Pendencias
 ------------
@@ -343,11 +414,23 @@ Pendencias
   dois lados, entao sao fieis. CONFERIDO ate a linha 1153: o ponto de
   atencao 5 era justamente essa fronteira -- o laco de lacunas (1095-1117)
   le `i` de fora e e um `for` que nao vaza `k`, porque `k` nao e lido depois
-  dele. Falta conferir o STEP 4 (Dia 9), que tem `do k=istart,iend` e
-  `do iw=istart,iend` com `iw` em `fasst_global`.
+  dele. CONFERIDO tambem no STEP 4 (1156-1425): dos quatro `do`
+  contados ali, `k`, `j` e `i` nao sao lidos depois do laco, mas `iw` E --
+  esta em `fasst_global`, logo e `fasst_main`/`open_water` da volta
+  SEGUINTE que o leem. Os dois `do iw=istart,iend` recebem portanto o
+  valor final explicito (`iend + 1`, ou `istart` quando o laco nao roda).
+* O STEP 4 nao tem `do while` cuja variavel saia errada: os dois usam
+  incremento explicito, igual ao original.
+* Os ganchos `_state`/`_locals` FICAM. A nota do Dia 8 dizia para remove-los
+  no Dia 9, "quando `main` rodar ate o fim e essas coisas virarem
+  observaveis pelos arquivos de saida" -- `main` agora roda ate o fim, mas a
+  segunda metade da condicao nao se cumpriu: quem escreveria esses arquivos
+  e `write_outputs`, que continua stub. Remover quando as 5 transcricoes
+  acima existirem.
 """
 
 import math
+import os
 import sys
 import time
 
@@ -616,6 +699,17 @@ class _Unit:
     def readline(self):
         return self.f.readline()
 
+    def seek(self, pos):
+        """O `rewind` escrito como os outros modulos o escrevem.
+
+        `initprofile.py:268` e `initsurface.py:301` fazem `.seek(0)` na
+        unidade (com o comentario `# rewind(30)`), porque foram escritos
+        antes de `_Unit` existir e tratam `state.unitN` como objeto de
+        arquivo cru. Delegar e o menor diff que atende os dois contratos --
+        o do driver, orientado a REGISTRO, e o deles.
+        """
+        return self.f.seek(pos)
+
     def write(self, s):
         return self.f.write(s)
 
@@ -856,6 +950,21 @@ def main(argv=None, _state=None, _locals=None):
     # dentro de `if(timstep > 0d0)` (linha 1092) e o le na linha seguinte
     # sem guarda nenhuma. E o ponto de atencao 9.
     rtstps = 0.0
+    # idem, usados a partir do STEP 4. O original atribui `code1..code5`,
+    # `first_loop`, `oldsd` e `oldhi` nas linhas 1190-1199, antes do
+    # primeiro uso; `tempcount` na 1281. O que IMPORTA aqui e `pdens`:
+    # nunca e inicializado em lugar nenhum e ja chega a `initsurface`
+    # (1202) / `initwater` (1261) como argumento.
+    code1 = 0
+    code2 = 0
+    code3 = 0
+    code4 = 0
+    code5 = 0
+    first_loop = 0
+    oldsd = 0.0
+    oldhi = 0.0
+    pdens = 0.0
+    tempcount = 0
 
     it = 0.0
     et = 0.0
@@ -1942,20 +2051,386 @@ def main(argv=None, _state=None, _locals=None):
         _locals.update(locals())
         _locals["_step3"] = dict(locals())
 
-    # ------------------------------------------------------------------
-    # A transcricao para aqui: linha 1153 do original. Falta:
-    #   STEP 4   (1156-1425) os dois lacos principais
-    #   STEP 6   (1433-1480) fecha arquivos, desaloca, tempo de CPU
-    # ------------------------------------------------------------------
-    unit4.close()
-    raise NotImplementedError(
-        "transcricao de fasst_driver.F90 em andamento: parou na linha 1153 "
-        "do original (fim do STEP 3)"
-    )
+    # ---------------- STEP 4 (linhas 1156-1425) ----------------
+    # Os dois lacos principais de calculo. Os dois ramos sao ~90% iguais e
+    # NAO sao identicos -- ponto de atencao 6. As QUATRO diferencas reais:
+    #
+    #   | | ponto unico | multiponto |
+    #   | teste de upsol | 1185 `upsol - tsol > eps` | 1324 `upsol > tsol` |
+    #   |                | (nao observavel -- ponto 22)                   |
+    #   | guarda final   | 1275 `i <= met_count`     | 1418 `i >= met_count`
+    #                                                  **e** `vitd_index /= 0`
+    #   |                | (a de 1275 e morta -- ponto 18)                |
+    #   | `stflag`       | so dentro de `water_flag <= 2` (1235)          |
+    #                    | TAMBEM antes dos lacos (1304) -- ponto 25      |
+    #
+    # NAO fatorar num helper comum: e exatamente esse diff que uma
+    # fatoracao destroi. Ver "Arquitetura" na docstring do modulo.
+    if state.single_multi_flag == 0:                      # um ponto so
+        i = 1
+        tflag = 0
+        while i <= state.met_count and tflag == 0:
+            if state.vitd_index == vitd_indexm[i]:
+                tflag = 1
+                # PONTO DE ATENCAO 25: o ramo multiponto tem um
+                # `stflag = 1` AQUI (1304); este nao tem. Nao acrescentar.
+                state.lat = latm[i]
+                state.mlong = longm[i]
+
+                # Depois da alocacao do STEP 3, nunca antes: `_MXL_REAL_1D`
+                # itera sobre as arrays alocaveis.
+                zero_mxl_params(state)
+
+                for k in range(state.istart, state.iend + 1):
+                    kk = k
+                    if state.infer_test == 1:
+                        kk = k - 1
+                    for j in range(1, MAXCOL + 1):
+                        state.met[k, j] = metm[i, kk, j]
+
+                    # Teste de dado faltante por TOLERANCIA, nunca por
+                    # igualdade -- consequencia dos pontos 15 e 16: a
+                    # quantizacao tira `mflag` da igualdade exata.
+                    if (_aint(abs(state.met[k, MetCol.ZEN] - state.mflag)
+                              * 1e5) * 1e-5 > EPS
+                            and abs(state.met[k, MetCol.ZEN]) > abs(9e1)):
+                        state.met[k, MetCol.TSOL] = 0e0
+                        state.met[k, MetCol.DIR] = 0e0
+                        state.met[k, MetCol.DIF] = 0e0
+                        state.met[k, MetCol.UPSOL] = 0e0
+
+                    if (_aint(abs(state.met[k, MetCol.UPSOL] - state.mflag)
+                              * 1e5) * 1e-5 > EPS):
+                        # Ponto de atencao 6: aqui e `upsol - tsol > eps`;
+                        # o ramo multiponto usa `upsol > tsol`.
+                        if (state.met[k, MetCol.UPSOL]
+                                - state.met[k, MetCol.TSOL] > EPS
+                                or state.met[k, MetCol.UPSOL] < EPS):
+                            state.met[k, MetCol.UPSOL] = state.mflag
+
+                code1 = 0
+                code2 = 0
+                code3 = 0
+                code4 = 0
+                code5 = 0
+                first_loop = 0        # 1a passada por fasst_main/open_water
+                sdensi = 0e0
+                phie = 0e0
+                oldsd = 0e0
+                oldhi = 0e0
+
+                if state.water_flag <= 2:
+                    # `nstr_flag` e `intent(out)`: sai na tupla de retorno,
+                    # nao na lista de argumentos (initsurface.py:469).
+                    (nstr_flag, code1, phie, pdens, oldsd, oldhi, sdensi,
+                     mtest, nt0, nm0) = initsurface(
+                        state, nt0, nm0, nprint, sprint, sname, ttest,
+                        mtest, code1, phie, pdens, oldsd, oldhi, sdensi)
+
+                    # `iw` e campo de `fasst_global`, nao local: e dele que
+                    # `fasst_main` tira o passo de tempo corrente. O
+                    # Fortran deixa `iw = iend + 1` ao sair do laco.
+                    for state.iw in range(state.istart, state.iend + 1):
+                        (code2, code3, code4, code5, first_loop, phie,
+                         pdens, oldsd, oldhi) = fasst_main(
+                            state, nprint, sprint, frozen, nstr_flag,
+                            sdensi, surfdepth, code2, code3, code4, code5,
+                            first_loop, phie, pdens, oldsd, oldhi)
+                        # as 6 linhas de `pest(iw,·)` estao comentadas no
+                        # original (1211-1216) -- nao transcritas
+                    # valor final da variavel de laco: o Fortran deixa
+                    # `iw = iend + 1` quando o laco roda, e `iw = istart`
+                    # quando a contagem de voltas e zero (iend < istart)
+                    state.iw = (state.iend + 1 if state.iend >= state.istart
+                                else state.istart)
+
+                    # Contexto do PONTO DE ATENCAO 7, nao defeito: a guarda
+                    # `single_multi_flag == 0` e alcancavel AQUI, porque e
+                    # exatamente o ramo em que estamos. E a copia da 1358 --
+                    # texto identico, mesma guarda -- que e morta, por estar
+                    # dentro do ramo `single_multi_flag == 1`.
+                    if state.error_code == 1 and state.single_multi_flag == 0:
+                        print()
+                        print(" !!!!!! Look in inferred.out for run-time "
+                              "messages, etc. for case # %8d" % state.freq_id)
+                        if code2 == 1:
+                            state.unit10.write(
+                                "\n Maximum interations in canopy profile "
+                                "calculation.\n")
+                        if code3 == 1:
+                            state.unit10.write(
+                                "\n Error in surface energy calculation.\n")
+                        if code4 == 1:
+                            state.unit10.write(
+                                "\n Error in snow melt calculation.\n")
+                        # o `if(code5 == 1)` esta comentado no original
+
+                    stflag = 1
+
+                    # o bloco de saida para o PEST (1237-1258) esta todo
+                    # comentado no original -- nao transcrito
+                else:
+                    (phie, pdens, oldsd, oldhi, sdensi) = initwater(
+                        state, sprint, phie, pdens, oldsd, oldhi, sdensi)
+
+                    # PONTO DE ATENCAO 24: NESTE ramo (ponto unico)
+                    # `istart` vale sempre 1. `istart = 2` acontece
+                    # unicamente em `infer_test == 1` (253-255), e para
+                    # chegar aqui e preciso `water_flag == 3`, atribuido
+                    # so em 448 e 508 -- as duas dentro do bloco 388-669,
+                    # todo ele sob `infer_test == 0`. Logo agua e hot
+                    # start sao mutuamente exclusivos no modo de ponto
+                    # unico. NAO vale para o ramo multiponto: la o
+                    # `water_flag = 3` pode vir de
+                    # `read_complex.F90:167` (`vegl_type == 15`), que nao
+                    # olha `infer_test`. Escrito com `istart` nos dois
+                    # casos, porque e o que o original escreve.
+                    for state.iw in range(state.istart, state.iend + 1):
+                        (first_loop, code2, code4, oldsd) = open_water(
+                            state, wtype, sprint, wvel, wdepth, sdensi,
+                            first_loop, code2, code4, oldsd)
+                    # valor final da variavel de laco: o Fortran deixa
+                    # `iw = iend + 1` quando o laco roda, e `iw = istart`
+                    # quando a contagem de voltas e zero (iend < istart)
+                    state.iw = (state.iend + 1 if state.iend >= state.istart
+                                else state.istart)
+
+                write_outputs(state, flprint, keep, vegint)
+            i = i + 1
+
+        # PONTO DE ATENCAO 18: esta mensagem e MORTA, por dois motivos
+        # independentes. (a) O `do while` so sai com `tflag == 0`
+        # quando `i > met_count`, e ai `i <= met_count` e falso -- a
+        # condicao e autocontraditoria. (b) Mesmo que nao fosse, o STEP 3
+        # (linha 1061, `fasst_driver.py` acima) ja PAROU o programa com a
+        # mesma busca falhando. A gemea do multiponto (1418) usa
+        # `i >= met_count` e e alcancavel.
+        if tflag == 0 and i <= state.met_count:
+            state.unit10.write(" Not finding met data%10d\n" % state.vitd_index)
+            print(" Not finding met data%10d" % state.vitd_index)
+
+    elif state.single_multi_flag == 1:                    # multiponto
+        tempcount = 0
+        io = 0
+        vitd_att = " "
+        vitd_att, io = state.unit5.read_a_io(vitd_att)     # linha de cabecalho
+
+        while io != -1:
+            tempcount = tempcount + 1
+            # Este `iend = iendi` (1288) e um restauro NECESSARIO, nao
+            # defesa decorativa -- e e o unico lugar do programa em que o
+            # valor da linha 820 e reposto. Quem o destroi e
+            # `missing_met.F90:257,654` (`iend = c3`, a contagem de
+            # registros DEPOIS do preenchimento de lacunas): ela usa o
+            # `iend` GLOBAL de `fasst_global`, e e chamada por
+            # `initsurface.F90:100,122,207,310,320` e
+            # `initwater.F90:70,92,128,198` -- as duas dentro do corpo
+            # deste laco, nos dois ramos. Sem a reposicao, o registro
+            # VITD seguinte herdaria o `iend` expandido do anterior.
+            #
+            # ATENCAO: por um tempo isto aqui dizia que a linha era
+            # inocua, conclusao tirada de varrer `iend` so dentro de
+            # `fasst_driver.F90`. `missing_met.py` E `initsurface.py` ja
+            # existem transcritas e fazem exatamente o descrito acima; o
+            # que escondia o efeito era o `initsurface` POSTICO do
+            # `demo()`, que nao chamava `missing_met`. O postico agora
+            # reproduz o efeito (parametro `iend_apos` de `_completo`) e
+            # o mutante de no-op E pego. Nao "simplificar" esta linha.
+            state.iend = iendi
+            (tflag, nt0, nm0, stflag, lcount, wtype, wvel, wdepth, ttest,
+             mtest, sname) = zero_parameters(state)
+
+            zero_mxl_params(state)
+
+            (wtype, io, lcount, nm0, wvel, wdepth, mtest,
+             sname) = read_complex(state, wtype, io, lcount, nm0, wvel,
+                                   wdepth, mtest, sname)
+
+            i = 1
+            tflag = 0
+            while i <= state.met_count and tflag == 0:
+                if state.vitd_index == vitd_indexm[i]:
+                    print(" Running case%12d of%12d freq_id = %12d"
+                          % (tempcount, num_frq, state.freq_id))
+
+                    tflag = 1
+                    # PONTO DE ATENCAO 25: este `stflag = 1` (1304) nao
+                    # tem equivalente no ramo de ponto unico. Importa so
+                    # no ramo de AGUA, porque o outro `stflag = 1` (1378)
+                    # esta dentro de `water_flag <= 2`.
+                    stflag = 1
+                    state.lat = latm[i]
+                    state.mlong = longm[i]
+                    for k in range(state.istart, state.iend + 1):
+                        kk = k
+                        if state.infer_test == 1:
+                            kk = k - 1
+                        for j in range(1, MAXCOL + 1):
+                            state.met[k, j] = metm[i, kk, j]
+
+                        if (_aint(abs(state.met[k, MetCol.ZEN] - state.mflag)
+                                  * 1e5) * 1e-5 > EPS
+                                and abs(state.met[k, MetCol.ZEN]) > abs(9e1)):
+                            state.met[k, MetCol.TSOL] = 0e0
+                            state.met[k, MetCol.DIR] = 0e0
+                            state.met[k, MetCol.DIF] = 0e0
+                            state.met[k, MetCol.UPSOL] = 0e0
+
+                        if (_aint(abs(state.met[k, MetCol.UPSOL] - state.mflag)
+                                  * 1e5) * 1e-5 > EPS):
+                            # Ponto de atencao 6: aqui e `upsol > tsol`; o
+                            # ramo de ponto unico usa `upsol - tsol > eps`.
+                            # Em teoria a diferenca apareceria com os dois
+                            # valores a menos de `eps` um do outro -- na
+                            # pratica NUNCA, porque a quantizacao do ponto
+                            # 16 os deixa a ~1e-15 de distancia no minimo.
+                            # Ver ponto 22.
+                            if (state.met[k, MetCol.UPSOL]
+                                    > state.met[k, MetCol.TSOL]
+                                    or state.met[k, MetCol.UPSOL] < EPS):
+                                state.met[k, MetCol.UPSOL] = state.mflag
+
+                    code1 = 0
+                    code2 = 0
+                    code3 = 0
+                    code4 = 0
+                    code5 = 0
+                    first_loop = 0
+                    sdensi = 0e0
+                    phie = 0e0
+                    oldsd = 0e0
+                    oldhi = 0e0
+                    if state.water_flag <= 2:
+                        (nstr_flag, code1, phie, pdens, oldsd, oldhi,
+                         sdensi, mtest, nt0, nm0) = initsurface(
+                            state, nt0, nm0, nprint, sprint, sname, ttest,
+                            mtest, code1, phie, pdens, oldsd, oldhi, sdensi)
+
+                        for state.iw in range(state.istart, state.iend + 1):
+                            (code2, code3, code4, code5, first_loop, phie,
+                             pdens, oldsd, oldhi) = fasst_main(
+                                state, nprint, sprint, frozen, nstr_flag,
+                                sdensi, surfdepth, code2, code3, code4,
+                                code5, first_loop, phie, pdens, oldsd,
+                                oldhi)
+                        # valor final da variavel de laco: o Fortran deixa
+                        # `iw = iend + 1` quando o laco roda, e `iw = istart`
+                        # quando a contagem de voltas e zero (iend < istart)
+                        state.iw = (state.iend + 1 if state.iend >= state.istart
+                                    else state.istart)
+
+                        # PONTO DE ATENCAO 7: a guarda e
+                        # `single_multi_flag == 0` DENTRO do ramo
+                        # `single_multi_flag == 1` -- nunca dispara. E a
+                        # copia literal da 1220, que no ramo dela e
+                        # alcancavel. Transcrito com a guarda errada.
+                        if (state.error_code == 1
+                                and state.single_multi_flag == 0):
+                            print()
+                            print(" !!!!!! Look in inferred.out for "
+                                  "run-time messages, etc. for case # %8d"
+                                  % state.freq_id)
+                            if code2 == 1:
+                                state.unit10.write(
+                                    "\n Maximum interations in canopy "
+                                    "profile calculation.\n")
+                            if code3 == 1:
+                                state.unit10.write(
+                                    "\n Error in surface energy "
+                                    "calculation.\n")
+                            if code4 == 1:
+                                state.unit10.write(
+                                    "\n Error in snow melt calculation.\n")
+
+                        stflag = 1
+                    else:
+                        (phie, pdens, oldsd, oldhi, sdensi) = initwater(
+                            state, sprint, phie, pdens, oldsd, oldhi,
+                            sdensi)
+
+                        for state.iw in range(state.istart, state.iend + 1):
+                            (first_loop, code2, code4, oldsd) = open_water(
+                                state, wtype, sprint, wvel, wdepth, sdensi,
+                                first_loop, code2, code4, oldsd)
+                        # valor final da variavel de laco: o Fortran deixa
+                        # `iw = iend + 1` quando o laco roda, e `iw = istart`
+                        # quando a contagem de voltas e zero (iend < istart)
+                        state.iw = (state.iend + 1 if state.iend >= state.istart
+                                    else state.istart)
+
+                    write_outputs(state, flprint, keep, vegint)
+                i = i + 1
+
+            # `i >= met_count`, nao `i <= met_count` como na 1275: aqui a
+            # condicao e satisfeita (o laco sai com `i == met_count + 1`) e
+            # a mensagem dispara de verdade. O `vitd_index /= 0` evita o
+            # ruido quando `read_complex` nao leu registro nenhum.
+            if (tflag == 0 and i >= state.met_count) and state.vitd_index != 0:
+                state.unit10.write("freq_id%10d Not finding met data%10d\n"
+                                   % (state.freq_id, state.vitd_index))
+                print("freq_id%10d Not finding met data%10d"
+                      % (state.freq_id, state.vitd_index))
+
+    # As chamadas de `makemtagroundout`/`makemtafasstout` (1428-1430) estao
+    # comentadas no proprio Fortran -- nao transcritas.
+
+    # ---------------- STEP 6 (linhas 1433-1480) ----------------
+    # ponytail: ultima captura do gancho `_locals`, ANTES dos `close` -- com
+    # os arquivos ainda abertos, para o `demo()` poder ler o que foi escrito.
+    # Esta captura NAO faz update plano, so o instantaneo nomeado: o `loc`
+    # plano continua sendo o retrato do fim do STEP 3, porque o STEP 4 reusa
+    # `i`, `k`, `kk`, `j`, `tflag`, `code1..5`, `first_loop`, `sdensi`,
+    # `phie`, `oldsd` e `oldhi`, e os asserts dos Dias 2-8 leem esses nomes
+    # esperando os valores de antes.
+    if _locals is not None:
+        _locals["_step6"] = dict(locals())
+
+    state.unit2.close()
+    if nprint == 1:
+        state.unit3.close()
+    # `== 1`, nao `== 0`: a unidade 5 e o arquivo VITD, e so o modo
+    # multiponto a abre (linha 901, com a MESMA guarda). Todos os 16
+    # `close` do STEP 6 repetem exatamente a guarda do `open` que lhes
+    # corresponde -- conferido um a um. Em Fortran `close` de unidade
+    # nunca aberta e inocuo; aqui seria `None.close()`.
+    if state.single_multi_flag == 1:
+        state.unit5.close()
+    state.unit10.close()
+    # PONTO DE ATENCAO 12: `status='delete'` -- os dois arquivos de hot
+    # start da execucao ANTERIOR sao APAGADOS ao final de uma execucao
+    # `infer_test == 1`. Quem rodar duas vezes seguidas perde a entrada.
+    if state.infer_test == 1:
+        state.unit11.close()
+        os.remove(state.unit11.path)
+    if state.infer_test == 1:
+        state.unit12.close()
+        os.remove(state.unit12.path)
+    state.unit17.close()
+    state.unit18.close()
+    if flprint == 1:
+        state.unit24.close()
+    if vegint > EPS:
+        state.unit28.close()
+    state.unit30.close()
+    state.unit31.close()
+    state.unit32.close()
+    state.unit33.close()
+    if sprint == 1:
+        state.unit55.close()
+    state.unit90.close()
+
+    # O bloco de `mv`/`rm` dos "temporarios" (1452-1459) esta comentado no
+    # original. Os `deallocate` (1461-1473) nao tem equivalente em Python.
+
+    # `close(4)` e `close(1)` ficam onde o original os tem: linhas 699 e
+    # 822, ou seja no fim do STEP 1 e do STEP 2.
 
     et = time.process_time()                                   # call cpu_time(et)
     print()
     print(" total run time: ", et - it)
+    # `stop` (1479) -- um `return`, NUNCA `sys.exit`: dentro do `demo()` um
+    # `sys.exit` sai em silencio, com exit 1 e sem mensagem nenhuma.
+    return
 
 
 # ---------------------------------------------------------------------------
@@ -2028,6 +2503,7 @@ def sort2(n, arr, arr1):
 def demo():
     """Checagens minimas do que ja esta transcrito. `python -m fasst.fasst_driver --demo`"""
     import tempfile
+    import inspect
     import os
 
     # ---- _strip_comment: ponto de atencao 13 ----
@@ -2103,12 +2579,15 @@ def demo():
     # Uma linha de dados met com as 32 colunas que o original le
     # (MetCol.YEAR .. MetCol.TSOIL). `hr` e parametrizada so para dar uma
     # marca distinguivel por linha.
-    def _linha_met(hr, ano=2010, prec=0.0, extra="", doy=100, minuto=0):
+    def _linha_met(hr, ano=2010, prec=0.0, extra="", doy=100, minuto=0,
+                   tsol=800.0, upsol=150.0, zen=30.0):
+        # colunas 23 (TSOL), 26 (UPSOL) e 29 (ZEN) parametrizadas: sao as
+        # tres que as correcoes do STEP 4 (1176-1187) olham.
         return (
             "%d %d %d %s 1013.0 25.0 50.0 3.0 180.0 %s 0 0.0 0 "
             "0.2 1.0 1 0.0 0.0 0 0.0 0.0 0 "
-            "800.0 600.0 200.0 150.0 350.0 400.0 30.0 180.0 0.0 20.0%s\n"
-            % (ano, doy, hr, minuto, prec, extra)
+            "%s 600.0 200.0 %s 350.0 400.0 %s 180.0 0.0 20.0%s\n"
+            % (ano, doy, hr, minuto, prec, tsol, upsol, zen, extra)
         )
 
     def _met(nome="yuma.met", cabecalho=None, corpo=None, cauda=""):
@@ -2182,6 +2661,14 @@ def demo():
         caminho = os.path.join(d, "caso.inp")
         with open(caminho, "w") as f:
             f.write(linhas.replace("@MET@", met if met else _MET))
+        # Ponto de atencao 12: o STEP 6 APAGA os dois binarios de hot start
+        # da execucao anterior. Sao fixtures compartilhados, entao recria-los
+        # a cada execucao e o que impede uma rodada `infer_test == 1` de
+        # derrubar todas as seguintes pela divergencia D1.
+        for _n2 in ("velho_ro_soil.dat", "velho_ro_time.dat"):
+            if not os.path.exists(os.path.join(d, _n2)):
+                with open(os.path.join(d, _n2), "wb") as f:
+                    f.write(b"")
         saida = _io.StringIO()
         antes = os.getcwd()
         try:
@@ -2210,16 +2697,77 @@ def demo():
         locais do `program`, nao campos de `FasstState` -- sem isto ficariam
         sem verificacao nenhuma.
 
-        Ha DUAS capturas em `main`: uma no fim do STEP 3 e outra no
-        marcador de fim da transcricao. A segunda sobrescreve a primeira,
-        entao o que volta aqui e o estado mais avancado que a execucao
-        alcancou. Se um stub levantar antes das duas (e `read_complex`
+        O `loc` PLANO e o retrato do fim do STEP 3. Os valores do fim da
+        execucao ficam em `loc["_step6"]`, e os do fim do bloco de hot
+        start em `loc["_hot"]` -- porque o STEP 4 reusa `i`, `k`, `kk`,
+        `j`, `tflag` e os `code*`, e o laco de lacunas reusa `t1n`/`t1oo`.
+        Se um stub levantar antes do fim do STEP 3 (e `read_complex`
         levanta, no modo multiponto), `loc` volta VAZIO -- nesse caso usar
         `_run` e checar so o estado.
         """
         st, loc = FasstState(), {}
         _exec(linhas, met, st, loc, tolera)
         return st, loc
+
+
+    # ---- `initsurface` e `initwater` posticos, para TODO o demo ----
+    # As duas sao transcricoes REAIS, mas nao rodam neste demo:
+    # `initprofile` (chamada por `initsurface`) le a tabela de propriedades
+    # de solo da unidade 30, e os quatro arquivos de propriedades que o
+    # STEP 3 abre por nome fixo sao stubs VAZIOS aqui. Com a tabela vazia,
+    # `soilp(8)` e `soilp(9)` saem iguais e `initprofile` PARA o programa
+    # (`initprofile.py:337`). Reproduzir as tabelas seria testar
+    # `initprofile`, nao o driver -- e as tabelas reais usam notacao `d0`
+    # do Fortran, que `_read_soil_record` ainda nao converte (pendencia
+    # daquele modulo, nao deste).
+    #
+    # Cada postico confere a aridade contra a assinatura REAL com
+    # `inspect.signature(...).bind(...)`: sem isso o patch esconderia
+    # justamente o erro que uma chamada de 14 argumentos convida.
+    _chamadas = {}
+    # Efeitos colaterais que um fixture pede aos posticos. So entram aqui
+    # efeitos que a sub-rotina REAL de fato tem -- `_ajustes["iend"]`
+    # existe porque `initsurface` chama `missing_met` (ja transcrita, em
+    # `fasst/missing_met.py`) e ela faz `state.iend = c3` na linha 343.
+    _ajustes = {}
+
+    def _registra(nome, state_, extra=None):
+        _chamadas.setdefault(nome, []).append(
+            dict(iw=state_.iw, lat=state_.lat, mlong=state_.mlong,
+                 freq_id=state_.freq_id, vitd_index=state_.vitd_index,
+                 water_flag=state_.water_flag, extra=extra))
+
+    _real = {nome: globals()[nome] for nome in
+             ("initsurface", "initwater", "fasst_main", "open_water",
+              "write_outputs", "read_complex")}
+
+    def _fake_initsurface(state_, nt0_, nm0_, nprint_, sprint_, sname_,
+                          ttest_, mtest_, code1_, phie_, pdens_, oldsd_,
+                          oldhi_, sdensi_):
+        inspect.signature(_real["initsurface"]).bind(
+            state_, nt0_, nm0_, nprint_, sprint_, sname_, ttest_, mtest_,
+            code1_, phie_, pdens_, oldsd_, oldhi_, sdensi_)
+        _registra("initsurface", state_)
+        if _ajustes.get("iend") is not None:
+            # `initsurface.py:243,260,337,460,467` chamam `missing_met`, e
+            # `missing_met.py:343,658` fazem `state.iend = c3` -- a
+            # contagem de registros DEPOIS do preenchimento de lacunas.
+            # Reproduzido aqui para que o restauro da 1288 fique
+            # observavel; nao e ficcao, e o que as duas reais fazem.
+            state_.iend = _ajustes["iend"]
+        # mesma tupla de 10 que a real devolve (initsurface.py:469)
+        return (_new_array(MAXN, 0), code1_, phie_, pdens_, oldsd_, oldhi_,
+                sdensi_, mtest_, nt0_, nm0_)
+
+    def _fake_initwater(state_, sprint_, phie_, pdens_, oldsd_, oldhi_,
+                        sdensi_):
+        inspect.signature(_real["initwater"]).bind(
+            state_, sprint_, phie_, pdens_, oldsd_, oldhi_, sdensi_)
+        _registra("initwater", state_)
+        return (phie_, pdens_, oldsd_, oldhi_, sdensi_)   # initwater.py:276
+
+    globals()["initsurface"] = _fake_initsurface
+    globals()["initwater"] = _fake_initwater
 
     _CABECALHO = (
         "@MET@                        ! met\n"
@@ -3328,12 +3876,24 @@ def demo():
             inspect.signature(_rc_real).bind(
                 state_, wtype_, io_, lcount_, nm0_, wvel_, wdepth_,
                 mtest_, sname_)
-            chamadas.append(state_.freq_id)
+            # `maxlines` so deixa de ser 0 depois da alocacao, que
+            # fecha o STEP 3 -- e o que separa as chamadas do laco do
+            # STEP 3 (1036-1050) das do laco do STEP 4 (1294).
+            chamadas.append((state_.freq_id, state_.maxlines))
+            no_step3 = state_.maxlines == 0
             # o real le UM registro VITD e escreve estes dois campos
             state_.vitd_index = 1234          # = pindex do met do fixture
-            state_.freq_id = 10 * len(chamadas)
-            return (wtype_, 0, lcount_, nm0_, wvel_, wdepth_, mtest_,
-                    sname_)
+            if no_step3:
+                # Este fixture e sobre o laco do STEP 3; `freq_id` nao e
+                # mexido nas chamadas do STEP 4 para o assert abaixo falar
+                # so do que o STEP 3 fez. Os fixtures do Dia 9 tem postico
+                # proprio, que escreve nas duas fases.
+                state_.freq_id = 10 * sum(1 for c in chamadas if c[1] == 0)
+            # `io = -1` assim que o STEP 3 termina: e o que faz o
+            # `while io != -1` do STEP 4 rodar o corpo UMA vez e sair,
+            # igual ao EOF do `read` real.
+            return (wtype_, 0 if no_step3 else -1, lcount_, nm0_, wvel_,
+                    wdepth_, mtest_, sname_)
 
         nome = "multi%d.vitd" % nlinhas
         with open(os.path.join(d, nome), "w") as f:
@@ -3346,14 +3906,21 @@ def demo():
             _exec(_MULTI.replace("complexo.vitd", nome), met, st_, loc_)
         finally:
             globals()["read_complex"] = _rc_real
-        return st_, loc_, chamadas
+        # so as chamadas do laco do STEP 3
+        return st_, loc_, [c for c in chamadas if c[1] == 0]
 
     # 3 linhas -> num_frq = 2 -> duas chamadas
     st, loc, chamadas = _multi(3)
     assert loc["num_frq"] == 2 and len(chamadas) == 2
     # `fdi = freq_id` so na PRIMEIRA volta (`if j == 1`, linha 1047): o
     # postico poe 10 na 1a chamada e 20 na 2a, e `fdi` fica com o 10.
-    assert loc["fdi"] == 10 and st.freq_id == 20
+    # `chamadas` guarda o `freq_id` que cada chamada VIU na entrada: 0 na
+    # primeira -- no modo multiponto o STEP 1 NAO chama `zero_parameters`,
+    # entao `freq_id` continua no zero do `FasstState` -- e 10 na segunda.
+    # Nao da para olhar `st.freq_id` no fim: o laco do STEP 4 chama
+    # `zero_parameters` (1289) e o poe em 1.
+    assert loc["fdi"] == 10
+    assert [c[0] for c in chamadas] == [0, 10]
     # o casamento aconteceu, e agora `i` SAI valendo o sitio casado --
     # ao contrario do caso `num_frq == 0`, em que ele vale -1
     assert loc["tflag"] == 1 and loc["kk"] == 1 and loc["i"] == 1
@@ -3372,7 +3939,7 @@ def demo():
     # 2 linhas -> num_frq = 1 -> uma chamada, e `fdi` e o unico freq_id
     st, loc, chamadas = _multi(2)
     assert loc["num_frq"] == 1 and len(chamadas) == 1
-    assert loc["fdi"] == 10 and st.freq_id == 10
+    assert loc["fdi"] == 10 and [c[0] for c in chamadas] == [0]
 
     # ---- quatro cenarios que a 1a rodada de mutacao do Dia 8 pediu ----
 
@@ -3414,6 +3981,530 @@ def demo():
     st, loc, _ = _hot((10, 11, 13, 14), met=met_hot_gap)
     assert loc["mtsteps"] == 1 and st.moverlapr == 4
     assert st.maxlines == st.iend + 1 + 4 + 1
+
+    # ---- STEP 4 e STEP 6 (linhas 1156-1480) ----
+    # Aqui `main` roda do inicio ao FIM. Os quatro externos que ainda
+    # faltam (`fasst_main`, `open_water`, `write_outputs`,
+    # `read_complex`) viram posticos que REGISTRAM a chamada, e
+    # `read_old_data` tambem -- assim os dois lacos principais, o
+    # despacho por `water_flag` e o STEP 6 ficam observaveis.
+    #
+    # Cada postico confere a aridade contra a assinatura real; e por isso
+    # que estes fixtures pegariam um erro na lista de argumentos, que e
+    # exatamente o risco de uma chamada de 14 posicoes como a de
+    # `initsurface`.
+
+    def _completo(linhas, met=None, erro=0, codes=(0, 0, 0), vitd=1234,
+                  nvitd4=1, tolera=(), wflag=None, iend_apos=None):
+        """Roda `main` do inicio ao fim, com os externos posticos.
+
+        `erro` vai para `state.error_code` e `codes` para (code2, code3,
+        code4) -- e o que liga o bloco de mensagens de erro. `vitd` e o
+        `vitd_index` que o `read_complex` postico escreve, e `nvitd4` o
+        numero de registros que ele entrega no laco do STEP 4 antes de
+        devolver `io = -1`.
+
+        `wflag`, quando dado, e o `water_flag` que o `read_complex`
+        postico escreve. Nao e licenca poetica: o `read_complex` REAL
+        escreve `water_flag` em nove pontos (`read_complex.F90` linhas
+        86, 88, 89, 97, 136, 152, 167, 188 e 265), e a 167
+        poe exatamente **3** (`vegl_type == 15`, UMD ocean) sem olhar
+        `infer_test`. E a unica porta para o ramo de agua no modo
+        multiponto -- o bloco 388-669 do driver, que e a porta do modo de
+        ponto unico, esta todo sob `infer_test == 0` (ponto 24). A ordem
+        tambem confere: `zero_parameters` (1289) zera `water_flag` e
+        `read_complex` (1294) vem depois.
+
+        `iend_apos`, quando dado, e o `iend` que o `initsurface` postico
+        deixa no estado ao sair -- tambem reproduzindo a real, que chama
+        `missing_met` (`missing_met.py:343,658`: `state.iend = c3`). E o
+        que torna observavel o restauro da 1288.
+        """
+        _chamadas.clear()
+        _ajustes.clear()
+        _ajustes["iend"] = iend_apos
+        cont = {"rc3": 0, "rc4": 0}
+
+        def _fm(state_, nprint_, sprint_, frozen_, nstr_flag_, sdensi_,
+                surfdepth_, code2_, code3_, code4_, code5_, first_loop_,
+                phie_, pdens_, oldsd_, oldhi_):
+            inspect.signature(_real["fasst_main"]).bind(
+                state_, nprint_, sprint_, frozen_, nstr_flag_, sdensi_,
+                surfdepth_, code2_, code3_, code4_, code5_, first_loop_,
+                phie_, pdens_, oldsd_, oldhi_)
+            _registra("fasst_main", state_, extra=first_loop_)
+            state_.error_code = erro
+            return (codes[0], codes[1], codes[2], code5_, 1, phie_,
+                    pdens_, oldsd_, oldhi_)
+
+        def _ow(state_, wtype_, sprint_, wvel_, wdepth_, sdensi_,
+                first_loop_, code2_, code4_, oldsd_):
+            inspect.signature(_real["open_water"]).bind(
+                state_, wtype_, sprint_, wvel_, wdepth_, sdensi_,
+                first_loop_, code2_, code4_, oldsd_)
+            _registra("open_water", state_,
+                      extra=(wtype_, wvel_, wdepth_, first_loop_))
+            return (1, code2_, code4_, oldsd_)
+
+        def _wo(state_, flprint_, keep_, vegint_):
+            inspect.signature(_real["write_outputs"]).bind(
+                state_, flprint_, keep_, vegint_)
+            _registra("write_outputs", state_,
+                      extra=(flprint_, keep_, vegint_))
+
+        def _rc(state_, wtype_, io_, lcount_, nm0_, wvel_, wdepth_,
+                mtest_, sname_):
+            inspect.signature(_real["read_complex"]).bind(
+                state_, wtype_, io_, lcount_, nm0_, wvel_, wdepth_,
+                mtest_, sname_)
+            no_step3 = state_.maxlines == 0
+            cont["rc3" if no_step3 else "rc4"] += 1
+            _registra("read_complex", state_, extra=dict(cont))
+            state_.vitd_index = vitd
+            if wflag is not None:
+                state_.water_flag = wflag
+            state_.freq_id = 100 + cont["rc3"] + cont["rc4"]
+            io2 = 0 if (no_step3 or cont["rc4"] < nvitd4) else -1
+            return (wtype_, io2, lcount_, nm0_, wvel_, wdepth_, mtest_,
+                    sname_)
+
+        def _rod(d1i_, ii_, wstart_, sdensi_, phie_, timeo_):
+            t = [[0.0] * 5 for _ in range(MOVERLAP + 1)]
+            for kk_, hr_ in enumerate((10, 11, 13, 14), start=1):
+                t[kk_][1] = 2010.0
+                t[kk_][2] = 100.0
+                t[kk_][3] = float(hr_)
+            return 1.0, 0.0, t
+
+        salvos = {}
+        for nome_, f_ in (("fasst_main", _fm), ("open_water", _ow),
+                          ("write_outputs", _wo), ("read_complex", _rc),
+                          ("read_old_data", _rod)):
+            salvos[nome_] = globals()[nome_]
+            globals()[nome_] = f_
+        st_, loc_ = FasstState(), {}
+        st_.moverlapr = 4
+        try:
+            saida_ = _exec(linhas, met, st_, loc_, tolera)
+        finally:
+            for nome_, f_ in salvos.items():
+                globals()[nome_] = f_
+        return st_, loc_, saida_
+
+    # ---- ponto unico, terra firme: o laco de 1169-1188 e o de 1206 ----
+    st, loc, saida = _completo(_LAND)
+    fim = loc["_step6"]
+    assert fim["tflag"] == 1
+    # `lat`/`mlong` saem de `latm`/`longm` do sitio casado (1164-1165)
+    assert st.lat == loc["latm"][1] == 32.5
+    assert st.mlong == loc["longm"][1] == -114.0
+    # uma chamada de `initsurface`, `iend - istart + 1` de `fasst_main`,
+    # uma de `write_outputs`; nada de `initwater`/`open_water`
+    assert len(_chamadas["initsurface"]) == 1
+    assert len(_chamadas["fasst_main"]) == st.iend - st.istart + 1 == 3
+    assert len(_chamadas["write_outputs"]) == 1
+    assert "initwater" not in _chamadas and "open_water" not in _chamadas
+    # `iw` e campo de estado, e e por ele que `fasst_main` sabe o passo
+    # de tempo: tem de valer istart, istart+1, ... a cada chamada
+    assert [c["iw"] for c in _chamadas["fasst_main"]] == [1, 2, 3]
+    # valor final da variavel de laco: o Fortran deixa `iw = iend + 1`
+    assert st.iw == st.iend + 1 == 4
+    # `first_loop = 0` na 1a chamada; o postico devolve 1, e o driver
+    # repassa esse 1 as seguintes (e `intent(inout)`)
+    assert [c["extra"] for c in _chamadas["fasst_main"]] == [0, 1, 1]
+    # `write_outputs(flprint, keep, vegint)` -- os tres vem do `.inp`
+    assert _chamadas["write_outputs"][0]["extra"] == (1, 1, 0.0)
+    # `stflag = 1` (1235) e os `code*` zerados (1190-1194)
+    assert fim["stflag"] == 1
+    assert (fim["code1"], fim["code3"], fim["code5"]) == (0, 0, 0)
+    # o laco de copia `met(k,j) = metm(i,kk,j)`, com kk == k
+    metm_ = loc["metm"]
+    for k_ in (1, 2, 3):
+        assert st.met[k_, MetCol.HR] == metm_[1, k_, MetCol.HR]
+        assert st.met[k_, MetCol.TSOL] == metm_[1, k_, MetCol.TSOL]
+    assert fim["kk"] == 3                       # ultima volta, kk == k
+    # `i` saiu do `do while` em met_count + 1
+    assert fim["i"] == st.met_count + 1 == 2
+
+    # ---- STEP 6: quais unidades fecham (1435-1450) ----
+    # `nprint = 1`, `flprint = 1`, `sprint = 0`, `vegint = 0` no `_LAND`
+    assert st.unit2.f.closed and st.unit3.f.closed
+    assert st.unit10.f.closed and st.unit17.f.closed and st.unit18.f.closed
+    assert st.unit24.f.closed
+    assert st.unit30.f.closed and st.unit31.f.closed
+    assert st.unit32.f.closed and st.unit33.f.closed
+    assert st.unit90.f.closed
+    # as nao abertas continuam None -- os `close` delas sao condicionais
+    assert st.unit5 is None and st.unit28 is None and st.unit55 is None
+    assert st.unit11 is None and st.unit12 is None
+    # o tempo de CPU sai na saida padrao (1476-1477)
+    assert " total run time: " in saida
+
+    # com `nprint = 0`, `sprint = 1` e `vegint > 0` as condicionais
+    # trocam de lado: 3 nao abre, 55 e 28 abrem e fecham
+    _CAB3 = _CABECALHO.replace("1.5 0.0 1 1 0 100 0", "1.5 0.5 0 1 1 100 0")
+    st, loc, saida = _completo(_CAB3 + _TERRA + "0 ! vegl\n0 ! vegh\n"
+                              + _SOLO)
+    assert st.unit3 is None
+    assert st.unit55 is not None and st.unit55.f.closed
+    assert st.unit28 is not None and st.unit28.f.closed
+    assert st.unit24 is not None and st.unit24.f.closed
+
+    # ---- as duas correcoes de `met` (1176-1187) ----
+    _CAB_MET = "3 32 32.5 -114.0 50.0 1234 1 -7.0 1.0 -999.0 2.0"
+
+    def _comzen(**kw):
+        nome = "fix%d.met" % len(_feitos)
+        _feitos.append(nome)
+        corpo = "".join(_linha_met(h, **kw) for h in (12, 13, 14))
+        return _completo(_LAND, met=_met(nome, cabecalho=_CAB_MET,
+                                        corpo=corpo))
+
+    # |zen| <= 90: nada e zerado
+    st, loc, _ = _comzen(zen=30.0)
+    assert st.met[1, MetCol.TSOL] != 0.0 and st.met[1, MetCol.DIR] != 0.0
+    # |zen| > 90 (sol abaixo do horizonte): tsol/dir/dif/upsol vao a zero
+    # -- mas o `upsol` NAO fica em zero. As duas correcoes se encadeiam:
+    # zerado o `upsol`, a correcao seguinte (1184-1187) ve
+    # `upsol < eps` e o troca pelo sentinela. Ou seja, depois de um
+    # registro noturno o `upsol` sai como FALTANTE, nao como zero.
+    st, loc, _ = _comzen(zen=100.0)
+    for col in (MetCol.TSOL, MetCol.DIR, MetCol.DIF):
+        assert st.met[1, col] == 0e0, col
+    assert st.met[1, MetCol.UPSOL] == st.mflag
+    # ...e vale o MODULO: -100 tambem passa
+    st, loc, _ = _comzen(zen=-100.0)
+    assert st.met[1, MetCol.TSOL] == 0e0
+    # exatamente 90 NAO passa (`> dabs(9d1)`, nao `>=`)
+    st, loc, _ = _comzen(zen=90.0)
+    assert st.met[1, MetCol.TSOL] != 0e0
+
+    # `zen` FALTANTE (igual ao sentinela) desliga a correcao, mesmo com
+    # modulo acima de 90: a 1a metade da guarda e o teste de dado
+    # faltante por tolerancia. -999 e o `mflag` do cabecalho.
+    st, loc, _ = _comzen(zen=-999.0)
+    assert abs(st.met[1, MetCol.ZEN] - st.mflag) < 1e-5
+    assert st.met[1, MetCol.TSOL] != 0e0
+
+    # upsol > tsol -> upsol vira `mflag` (1185-1186)
+    st, loc, _ = _comzen(tsol=100.0, upsol=200.0)
+    assert st.met[1, MetCol.UPSOL] == st.mflag
+    # upsol < eps -> idem (a 2a metade do `.or.`)
+    st, loc, _ = _comzen(tsol=100.0, upsol=0.0)
+    assert st.met[1, MetCol.UPSOL] == st.mflag
+    # upsol entre eps e tsol -> fica como esta
+    st, loc, _ = _comzen(tsol=100.0, upsol=50.0)
+    assert st.met[1, MetCol.UPSOL] == _anint(50.0, 15)
+    # upsol JA faltante -> a guarda externa nem entra
+    st, loc, _ = _comzen(tsol=100.0, upsol=-999.0)
+    assert abs(st.met[1, MetCol.UPSOL] - st.mflag) < 1e-5
+
+    # PONTO DE ATENCAO 22: a diferenca entre os dois ramos do
+    # ponto 6 no teste de `upsol` -- `upsol - tsol > eps` (1185) contra
+    # `upsol > tsol` (1324) -- NAO e observavel. Para diferir seria
+    # preciso `0 < upsol - tsol <= eps` com `upsol >= eps`, e a
+    # quantizacao do ponto 16 (`anint(x*1d15)*1d-15`) deixa todo valor
+    # do met num multiplo de ~1e-15: a menor distancia possivel entre
+    # dois valores lidos e ~1e-15, sete ordens de grandeza acima de
+    # `eps` = 2.22e-16. O par abaixo e o mais apertado que o arquivo
+    # consegue carregar, e os dois ramos concordam nele.
+    st, loc, _ = _comzen(tsol=1e-15, upsol=2e-15)
+    assert st.met[1, MetCol.TSOL] == _anint(1e-15, 15)
+    assert st.met[1, MetCol.UPSOL] == st.mflag        # 2e-15 > 1e-15
+    assert _anint(2e-15, 15) - _anint(1e-15, 15) > EPS
+    # e o que a quantizacao faz com qualquer coisa mais fina que isso:
+    # 9e-16 e 1e-15 colapsam no MESMO valor
+    assert _anint(9e-16, 15) == _anint(1e-15, 15)
+
+    # ---- o bloco de mensagens de erro (1219-1233) ----
+    st, loc, saida = _completo(_LAND, erro=1, codes=(1, 1, 1))
+    assert "!!!!!! Look in inferred.out" in saida
+    with open(os.path.join(d, "inferred.out")) as f:
+        inf = f.read()
+    assert "Maximum interations in canopy profile calculation." in inf
+    assert "Error in surface energy calculation." in inf
+    assert "Error in snow melt calculation." in inf
+    # os tres `if(codeN == 1)` sao independentes
+    st, loc, saida = _completo(_LAND, erro=1, codes=(0, 1, 0))
+    with open(os.path.join(d, "inferred.out")) as f:
+        inf = f.read()
+    assert "Error in surface energy calculation." in inf
+    assert "Maximum interations" not in inf and "snow melt" not in inf
+    # `error_code = 0` desliga o bloco inteiro
+    st, loc, saida = _completo(_LAND, erro=0, codes=(1, 1, 1))
+    assert "!!!!!! Look in inferred.out" not in saida
+    with open(os.path.join(d, "inferred.out")) as f:
+        assert f.read() == ""
+
+    # ---- despacho por `water_flag` (1201 / 1260) ----
+    # UMD 14 -> ocean -> water_flag 3 -> o ramo de `initwater`/`open_water`
+    # os 4 registros de folhagem SAO consumidos mesmo com a vegetacao
+    # descartada pelo ramo de agua -- igual ao helper `_veg` acima
+    _OCEANO = (_CABECALHO + _TERRA + "2014 ! vegl_type\n" + _FOLHAGEM
+               + "0 ! vegh_type\n" + _SOLO)
+    st, loc, saida = _completo(_OCEANO)
+    assert st.water_flag == 3
+    assert len(_chamadas["initwater"]) == 1
+    assert len(_chamadas["open_water"]) == st.iend - st.istart + 1 == 3
+    assert "initsurface" not in _chamadas and "fasst_main" not in _chamadas
+    assert [c["iw"] for c in _chamadas["open_water"]] == [1, 2, 3]
+    assert st.iw == 4
+    # `open_water` recebe `wtype`, `wvel` e `wdepth`; e `first_loop`
+    # entra 0 e volta 1, igual ao outro ramo
+    assert [c["extra"][3] for c in _chamadas["open_water"]] == [0, 1, 1]
+    # `write_outputs` e chamada nos DOIS ramos (1270)
+    assert len(_chamadas["write_outputs"]) == 1
+    # e o bloco de mensagens de erro NAO existe neste ramo: mesmo com
+    # error_code = 1 nada e impresso
+    st, loc, saida = _completo(_OCEANO, erro=1, codes=(1, 1, 1))
+    assert "!!!!!! Look in inferred.out" not in saida
+
+    # `stflag` fica em 0 no ramo de agua: o `stflag = 1` da 1235 esta
+    # dentro do `if(water_flag <= 2)`
+    assert loc["_step6"]["stflag"] == 0
+
+    # ---- o laco multiponto do STEP 4 (1280-1424) ----
+    # Um `.vitd` com 2 linhas -> num_frq = 1 -> UMA chamada de
+    # `read_complex` no STEP 3; as outras vem do laco do STEP 4.
+    with open(os.path.join(d, "dois.vitd"), "w") as f:
+        f.write("cabecalho do arquivo complexo\nregistro 1\n")
+    _MULTI2 = _MULTI.replace("complexo.vitd", "dois.vitd")
+
+    st, loc, saida = _completo(_MULTI2, nvitd4=1)
+    fim = loc["_step6"]
+    # um registro VITD processado: `tempcount` conta os registros
+    assert fim["tempcount"] == 1
+    # os TRES numeros da mensagem, nao so o texto: `tempcount` (o
+    # registro corrente), `num_frq` (o total) e `freq_id`. Sem isto uma
+    # troca de `tempcount` por `num_frq` na lista de argumentos passa.
+    assert (" Running case%12d of%12d freq_id = %12d"
+            % (1, loc["num_frq"], st.freq_id)) in saida
+    assert loc["num_frq"] == 1
+    # `iend = iendi` e refeito a cada registro (1288)
+    assert st.iend == loc["iendi"] == 3
+    # `zero_parameters` roda por registro (1289) e `zero_mxl_params`
+    # tambem (1292) -- as duas ANTES de `read_complex` (1294)
+    assert len(_chamadas["read_complex"]) == 2        # 1 no STEP 3, 1 aqui
+    assert _chamadas["read_complex"][0]["extra"] == {"rc3": 1, "rc4": 0}
+    assert _chamadas["read_complex"][1]["extra"] == {"rc3": 1, "rc4": 1}
+    # o casamento aconteceu e o ramo de terra rodou
+    assert len(_chamadas["initsurface"]) == 1
+    assert len(_chamadas["fasst_main"]) == 3
+    assert [c["iw"] for c in _chamadas["fasst_main"]] == [1, 2, 3]
+    assert len(_chamadas["write_outputs"]) == 1
+    assert fim["stflag"] == 1
+    # as duas correcoes de `met` (1313-1325) sao uma SEGUNDA copia do
+    # codigo, nao a mesma: um cenario noturno so no ramo de ponto unico
+    # deixaria a copia daqui sem teste nenhum. Um mutante em cada linha
+    # das duas copias tem de ser pego pela copia dela.
+    st_n, loc_n, _ = _completo(
+        _MULTI2, nvitd4=1,
+        met=_met("noite_multi.met", cabecalho=_CAB_MET,
+                 corpo="".join(_linha_met(h, zen=100.0)
+                               for h in (12, 13, 14))))
+    for col in (MetCol.TSOL, MetCol.DIR, MetCol.DIF):
+        assert st_n.met[1, col] == 0e0, col
+    assert st_n.met[1, MetCol.UPSOL] == st_n.mflag
+    # e o encadeamento das duas correcoes vale aqui tambem, apesar de a
+    # segunda usar `upsol > tsol` em vez de `upsol - tsol > eps`
+    st_n, loc_n, _ = _completo(
+        _MULTI2, nvitd4=1,
+        met=_met("upsol_multi.met", cabecalho=_CAB_MET,
+                 corpo="".join(_linha_met(h, tsol=100.0, upsol=200.0)
+                               for h in (12, 13, 14))))
+    assert st_n.met[1, MetCol.UPSOL] == st_n.mflag
+
+    # STEP 6: a unidade 5 e a UNICA que so existe neste modo, e o `close`
+    # dela (1437) tem a guarda `single_multi_flag == 1` -- a mesma do
+    # `open` da 901. O caso de ponto unico acima so consegue checar que
+    # ela ficou `None`; e aqui que o `close` em si fica observavel.
+    assert st.unit5 is not None and st.unit5.f.closed
+
+    # dois registros: tudo dobra (menos o `read_complex` do STEP 3)
+    st, loc, saida = _completo(_MULTI2, nvitd4=2)
+    assert loc["_step6"]["tempcount"] == 2
+    assert len(_chamadas["read_complex"]) == 3
+    assert len(_chamadas["initsurface"]) == 2
+    assert len(_chamadas["fasst_main"]) == 6
+    assert len(_chamadas["write_outputs"]) == 2
+    assert saida.count(" Running case") == 2
+    # com DOIS registros os numeros deixam de coincidir -- `tempcount`
+    # chega a 2 enquanto `num_frq` fica em 1 -- e so aqui uma troca dos
+    # dois na lista de argumentos da 1300 fica visivel. Com um registro so
+    # as duas versoes imprimem a mesma linha.
+    assert loc["num_frq"] == 1
+    assert (" Running case%12d of%12d freq_id = %12d"
+            % (2, 1, st.freq_id)) in saida
+    # `freq_id` do postico aparece na mensagem de cada registro
+    assert st.freq_id == 100 + 1 + 2
+
+    # ---- multiponto COM hot start ----
+    # `infer_test` e `single_multi_flag` sao campos independentes do
+    # cabecalho, entao esta combinacao e alcancavel -- e e a unica em que
+    # o laco multiponto roda com `istart == 2`. Sem ela, todo mutante de
+    # `istart` ou de `kk` no ramo multiponto escapa, porque com
+    # `istart == 1` e `kk == k` as versoes certa e errada coincidem.
+    _MULTI_HOT = "\n".join((
+        "@MET@ !",
+        "1 1 0.5 1 !",                       # infer_test, single_multi
+        "velho_ro_soil.dat ! ro1o",          # so lido com infer_test == 1
+        "1.5 0.0 1 1 0 100 0 !",
+        "dois.vitd !",
+        "meusolo.inp !",
+        ""))
+    st, loc, saida = _completo(_MULTI_HOT, nvitd4=1)
+    assert st.infer_test == 1 and st.single_multi_flag == 1
+    assert st.istart == 2
+    fim = loc["_step6"]
+    # `kk = k - 1` tambem nesta copia do codigo (1308-1309)
+    assert fim["k"] == st.iend and fim["kk"] == st.iend - 1
+    metm_ = loc["metm"]
+    for k_ in range(st.istart, st.iend + 1):
+        assert st.met[k_, MetCol.HR] == metm_[1, k_ - 1, MetCol.HR]
+    # o laco de `fasst_main` comeca em `istart`, nao em 1
+    assert [c["iw"] for c in _chamadas["fasst_main"]] == list(
+        range(st.istart, st.iend + 1))
+    # e o valor final de `iw` e `iend + 1`, como no outro ramo
+    assert st.iw == st.iend + 1
+    # PONTO DE ATENCAO 12 vale igual no multiponto
+    assert not os.path.exists(os.path.join(d, "velho_ro_soil.dat"))
+
+    # ---- o restauro `iend = iendi` da 1288 ----
+    # Com DOIS registros VITD e um `initsurface` que mexe em `iend` -- o
+    # que o real faz, via `missing_met` -- o segundo registro so volta a
+    # `iendi` por causa da 1288. Sem ela herdaria o `iend` estragado pelo
+    # primeiro, e o laco de `fasst_main` da 2a volta mudaria de tamanho.
+    st, loc, saida = _completo(_MULTI2, nvitd4=2, iend_apos=1)
+    assert loc["iendi"] == 3
+    # 3 chamadas de `fasst_main` por registro nas DUAS voltas: a 2a volta
+    # so tem 3 porque a 1288 reps `iend`. Sem o restauro a 2a volta veria
+    # o `iend == 1` que o `initsurface` da 1a deixou, e daria 1 chamada.
+    # o que o restauro protege e o laco de COPIA do met (1307), que roda
+    # ANTES de `initsurface`: na 2a volta ele vai de novo a `iendi`, e
+    # `k` sai valendo 3. Sem a 1288 a 2a volta veria o `iend == 1` que o
+    # `initsurface` da 1a volta deixou, e `k` sairia 1.
+    assert loc["_step6"]["k"] == 3
+    # `fasst_main`, ao contrario, e chamada DEPOIS de `initsurface`, logo
+    # ja ve o `iend` estragado: uma chamada por registro, nao tres
+    assert [c["iw"] for c in _chamadas["fasst_main"]] == [1, 1]
+    # e no FIM `iend` fica estragado mesmo: o restauro e no topo de cada
+    # volta, e depois da ultima ninguem mais o refaz
+    assert st.iend == 1
+
+    # ---- o ramo de AGUA no multiponto ----
+    # Alcancado por `read_complex`, nao pelo bloco de vegetacao: ver o
+    # `wflag` de `_completo`. E a contraparte multiponto do `_OCEANO`.
+    st, loc, saida = _completo(_MULTI2, nvitd4=1, wflag=3)
+    assert st.water_flag == 3
+    assert len(_chamadas["initwater"]) == 1
+    assert len(_chamadas["open_water"]) == st.iend - st.istart + 1 == 3
+    assert "initsurface" not in _chamadas and "fasst_main" not in _chamadas
+    assert [c["iw"] for c in _chamadas["open_water"]] == [1, 2, 3]
+    assert st.iw == st.iend + 1
+    assert [c["extra"][3] for c in _chamadas["open_water"]] == [0, 1, 1]
+    assert len(_chamadas["write_outputs"]) == 1
+
+    # PONTO DE ATENCAO 25: a QUARTA diferenca entre os dois ramos do STEP
+    # 4, que o ponto 6 nao listava. O multiponto tem um `stflag = 1` na
+    # 1304, antes dos lacos; o ramo de ponto unico NAO tem o equivalente
+    # (1162-1165 so atribui `tflag`, `lat` e `mlong`). Como o outro
+    # `stflag = 1` -- 1235 / 1378 -- esta dentro de `water_flag <= 2`, a
+    # diferenca e observavel exatamente no ramo de AGUA: aqui `stflag`
+    # sai 1, e no `_OCEANO` de ponto unico sai 0. Mais uma razao para nao
+    # fatorar os dois ramos. (Em si `stflag` e variavel MORTA: o unico
+    # leitor, a 1453, esta comentada no proprio Fortran -- como o `modyo`
+    # do ponto 17. So o gancho `_locals` a torna observavel.)
+    assert loc["_step6"]["stflag"] == 1
+
+    # agua + hot start no multiponto: a combinacao que o modo de ponto
+    # unico NAO consegue (ponto 24). E o unico caminho em que o
+    # `do iw=istart,iend` de `open_water` roda com `istart == 2`.
+    st, loc, saida = _completo(_MULTI_HOT, nvitd4=1, wflag=3)
+    assert st.water_flag == 3 and st.istart == 2
+    assert [c["iw"] for c in _chamadas["open_water"]] == list(
+        range(st.istart, st.iend + 1))
+    assert _chamadas["open_water"][0]["iw"] == 2        # nao 1
+    assert st.iw == st.iend + 1
+
+    # ---- a fronteira de `zen` na copia multiponto ----
+    # exatamente 90 NAO passa (`> dabs(9d1)`, nao `>=`), igual ao outro
+    # ramo -- e tem de ser conferido nas DUAS copias
+    st, loc, _ = _completo(
+        _MULTI2, nvitd4=1,
+        met=_met("zen90_multi.met", cabecalho=_CAB_MET,
+                 corpo="".join(_linha_met(h, zen=90.0)
+                               for h in (12, 13, 14))))
+    assert st.met[1, MetCol.TSOL] != 0e0
+
+    # `first_loop` entra 0 e volta 1 tambem nesta copia: o postico
+    # devolve 1 e o driver repassa as chamadas seguintes
+    st, loc, saida = _completo(_MULTI2, nvitd4=1)
+    assert [c["extra"] for c in _chamadas["fasst_main"]] == [0, 1, 1]
+
+    # PONTO DE ATENCAO 7: o reporte de erro do ramo multiponto (1358)
+    # tem a guarda `single_multi_flag == 0` DENTRO do ramo
+    # `single_multi_flag == 1` -- nunca dispara. Com `error_code = 1` e
+    # os tres codes em 1, o ramo de ponto unico imprime (ja verificado
+    # acima) e este NAO imprime nada.
+    st, loc, saida = _completo(_MULTI2, nvitd4=1, erro=1, codes=(1, 1, 1))
+    assert st.single_multi_flag == 1 and st.error_code == 1
+    assert "!!!!!! Look in inferred.out" not in saida
+    with open(os.path.join(d, "inferred.out")) as f:
+        assert f.read() == ""
+
+    # ---- as duas mensagens "Not finding met data" ----
+    # Multiponto (1418): alcancavel. `read_complex` entrega um
+    # `vitd_index` que nao casa com nenhum sitio do met, o laco interno
+    # sai com `i == met_count + 1` (logo `i >= met_count`) e a mensagem
+    # dispara nos dois destinos.
+    st, loc, saida = _completo(_MULTI2, nvitd4=1, vitd=9999)
+    assert loc["_step6"]["tflag"] == 0 and st.vitd_index == 9999
+    assert "Not finding met data" in saida and "freq_id" in saida
+    with open(os.path.join(d, "inferred.out")) as f:
+        assert "Not finding met data" in f.read()
+    # e nada do ramo de calculo rodou
+    assert "initsurface" not in _chamadas
+    assert "write_outputs" not in _chamadas
+
+    # o `vitd_index /= 0` da 1418 cala a mensagem quando `read_complex`
+    # nao leu registro nenhum (`zero_parameters` deixa `vitd_index` em 0)
+    st, loc, saida = _completo(_MULTI2, nvitd4=1, vitd=0)
+    assert st.vitd_index == 0
+    assert "Not finding met data" not in saida
+
+    # PONTO DE ATENCAO 18: a gemea do ponto unico (1275) e MORTA,
+    # por dois motivos independentes. (a) A condicao e
+    # autocontraditoria: o `do while` so sai com `tflag == 0` quando
+    # `i > met_count`, e ai `i <= met_count` e falso. (b) Mesmo que nao
+    # fosse, o STEP 3 ja PAROU o programa com a mesma busca falhando --
+    # e o que o fixture `_SEM_CASO` acima verifica. Nos dois casos de
+    # ponto unico que existem no demo a mensagem nunca sai.
+    st, loc, saida = _completo(_LAND)
+    assert loc["_step6"]["tflag"] == 1          # casou: o `if` nem entra
+    assert loc["_step6"]["i"] == st.met_count + 1
+    assert "Not finding met data" not in saida
+
+    # ---- infer_test == 1: `kk = k - 1` e o ponto de atencao 12 ----
+    st, loc, saida = _completo(_HOT)
+    assert st.infer_test == 1 and st.istart == 2
+    fim = loc["_step6"]
+    # `kk = k - 1` no hot start: a ultima volta tem k == iend
+    assert fim["k"] == st.iend and fim["kk"] == st.iend - 1
+    # a copia usou `metm(i, k-1, ·)`, deslocada de uma linha
+    metm_ = loc["metm"]
+    for k_ in range(st.istart, st.iend + 1):
+        assert st.met[k_, MetCol.HR] == metm_[1, k_ - 1, MetCol.HR]
+    # o laco de `fasst_main` vai de istart a iend, nao de 1
+    assert [c["iw"] for c in _chamadas["fasst_main"]] == list(
+        range(st.istart, st.iend + 1))
+    # PONTO DE ATENCAO 12: `close(11/12, status='delete')` APAGA os dois
+    # binarios da execucao anterior. Quem rodar duas vezes seguidas com
+    # `infer_test == 1` perde a entrada -- e aqui o `_exec` os recria
+    # justamente porque o STEP 6 os apagou.
+    assert st.unit11 is not None and st.unit11.f.closed
+    assert st.unit12 is not None and st.unit12.f.closed
+    assert not os.path.exists(os.path.join(d, "velho_ro_soil.dat"))
+    assert not os.path.exists(os.path.join(d, "velho_ro_time.dat"))
 
     print("demo OK")
 
