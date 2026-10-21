@@ -44,9 +44,7 @@ leitura de arquivo (units 31/32/33) nao seguem a mesma convencao entre
 si. Aqui, isso fica exposto via um stub local (`_read_table_lines`),
 usado na chamada de `veg_propl` -- ver "Dependencias externas".
 
-`read_old_data` nao tem implementacao conhecida -- e um stub de modulo
-(levanta `NotImplementedError`), no mesmo padrao de `_read_veg_table_row`
-em `module_canopy.py`. `met_date`, `missing_met`, `upr_case` e
+`read_old_data` e real, importada de `fasst.read_old_data`. `met_date`, `missing_met`, `upr_case` e
 `get_user_soil_params` sao reais, importadas de `fasst.functions`/
 `fasst.missing_met`/`fasst.us_soil_tools`. `get_user_soil_params` nao usa
 `state`: recebe o arquivo da unidade 90 (`state.unit90`) e o nome do solo,
@@ -95,8 +93,8 @@ initsurface, mesmo eles sendo "so entrada" na assinatura Fortran local.
 
 Dependencias externas
 -----------------------
-Nenhuma implementada por suposicao: `read_old_data` e um stub local
-(levanta `NotImplementedError`); `met_date`, `missing_met`, `upr_case` e
+Nenhuma implementada por suposicao: `read_old_data` e real
+(`fasst.read_old_data`); `met_date`, `missing_met`, `upr_case` e
 `get_user_soil_params` sao reais (`fasst.functions`/`fasst.missing_met`/
 `fasst.us_soil_tools`); `veg_propl`/`veg_proph` sao as funcoes reais (em
 `module_lowveg.py`/`module_canopy.py`).
@@ -147,6 +145,7 @@ from .us_soil_tools import get_user_soil_params, upr_case
 from .module_lowveg import veg_propl
 from .module_canopy import veg_proph
 from .initprofile import initprofile
+from .read_old_data import read_old_data
 
 
 def _new_array(n, fill=0.0):
@@ -168,14 +167,6 @@ def _anint(x, p=0):
     xs = x * (10.0**p)
     ai = math.copysign(math.floor(abs(xs) + 0.5), xs)
     return ai * (10.0**-p)
-
-
-# ---------------------------------------------------------------------------
-# Dependencias externas ainda sem implementacao conhecida (ver docstring)
-# ---------------------------------------------------------------------------
-def read_old_data(d1i, mpos, wstart, sdensi, phie, timeo):
-    """TODO: funcao externa -- recupera sdensi/phie/timeo de uma execucao anterior (multi-run)."""
-    raise NotImplementedError("read_old_data ainda nao foi traduzida (funcao externa)")
 
 
 def _read_table_lines(unit):
@@ -234,7 +225,7 @@ def initsurface(state: FasstState, nt0, nm0, nprint, sprint, sname, ttest, mtest
         d1i = 1
         wstart = max(state.moverlapr, state.istart)
         timeo = [[0.0] * 5 for _ in range(MOVERLAP + 1)]
-        sdensi, phie = read_old_data(d1i, state.mpos, wstart, sdensi, phie, timeo)
+        sdensi, phie = read_old_data(state, d1i, state.mpos, wstart, sdensi, phie, timeo)
 
         for i in range(1, MAXCOL + 1):
             met1[i] = state.met[state.istart - 1][i]

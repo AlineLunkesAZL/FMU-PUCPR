@@ -65,7 +65,7 @@ O driver e o dono de tres coisas que nenhum outro modulo pode assumir:
 
 Estado desta transcricao
 --------------------------
-EM ANDAMENTO (cronograma de 10 dias uteis).
+Cronograma de 10 dias uteis CONCLUIDO; falta so `fasst_main` (ver abaixo).
   Dia 1  esqueleto, docstring, os 5 stubs externos
   Dia 2  `_Unit`/`_strip_comment`, secao de declaracoes, STEP 0 e o
          cabecalho de `fassti.inp` (linhas 109-266)
@@ -79,55 +79,80 @@ EM ANDAMENTO (cronograma de 10 dias uteis).
   Dia 8  STEP 3 -- lacunas de tempo, `maxlines`, `allocate_run_arrays`
          (1086-1153)
   Dia 9  STEP 4 -- os dois lacos principais de calculo; STEP 6 -- fecha
-         arquivos e imprime o tempo de CPU (1156-1480)  <-- aqui
+         arquivos e imprime o tempo de CPU (1156-1480)
   Dia 10 `docs/doc-transcricao-fasst_driver.docx`
+  depois  integracao das 4 dependencias externas transcritas
+          (`open_water`, `read_complex`, `read_old_data`,
+          `write_outputs`), conferida contra o FASST compilado  <-- aqui
 
 O `program` esta TRANSCRITO DE PONTA A PONTA: `main()` roda do primeiro
-registro de `fassti.inp` ao `stop` da linha 1479. O que falta nao e mais
-texto do `.F90` deste arquivo -- sao as 5 sub-rotinas externas abaixo, que
-continuam stubs. `demo()` as substitui por posticos que conferem a aridade
-contra a assinatura real e registram cada chamada, e e assim que os dois
-lacos do STEP 4 ficam observaveis sem elas.
+registro de `fassti.inp` ao `stop` da linha 1479. Das 5 sub-rotinas
+externas, 4 ja sao reais; falta so `fasst_main`, que continua stub. Por
+isso o caminho de AGUA (`water_flag == 3`: `initwater` -> `open_water` ->
+`write_outputs`, que nunca chama `fasst_main`) ja roda inteiro em Python,
+e o de terra ainda para no stub.
+
+Verificacao contra o Fortran: `cmp_fortran_agua.py` (raiz do repo, nao
+versionado) compila o FASST original com gfortran (TDM-GCC, `-O0`) e roda
+o mesmo `fassti.inp` nos dois lados, em seis casos de oceano: morno; frio
+com neve e gelo; frio com dossel; multiponto com tres registros VITD
+(vegetacao baixa ligada, `vegint > 0`, o terceiro sem met, que dispara o
+"Not finding met data" da 1418); e um par multiponto `um`/`um_hot` em que
+o segundo faz hot start (`infer_test = 1`, `istart = 2`) lendo os
+binarios que o PROPRIO Fortran escreveu no primeiro -- `read_old_data`
+modos 3 e 1. Sairam IDENTICOS byte a byte: unidade 2 (`.fst`, FORMAT
+1000/1001), unidade 28 (`.vgt`, FORMAT 1004 e a interpolacao de `t1`),
+`inferred.out` e os dois binarios de hot start (`access='stream'`). Nao
+verificado: a unidade 24 (`.flx` sai so com o cabecalho -- o corpo exige
+`water_flag <= 1`, logo `fasst_main`) e o `.grd` (vazio no caminho de
+agua). Diferencas restantes, nenhuma do driver:
+  * `phie` em `_ro_soil.dat` no caso sem neve: local nao inicializada de
+    `open_water`, lixo de pilha no Fortran, 0.0 aqui (ponto 3 de
+    open_water.py);
+  * `sgralbedo` e `stor(6)` em `_ro_soil.dat` no caso com dossel: NaN no
+    Fortran, 0.0 aqui, calculados em `module_canopy`/`albedo_emis` --
+    PENDENTE daqueles modulos;
+  * o `.snw` (unidade 55): `snow.py` omite a escrita de proposito
+    (snow.py:302) -- PENDENTE daquele modulo.
+A comparacao achou e corrigiu, fora do driver: `module_lowveg.py` testava
+`iw != 0`/`iw >= 1` onde o Fortran tem `iw /= 1`/`iw >= 2` (como se `iw`
+fosse 0-based), e `state.avect` tinha uma posicao a menos. E mostrou um
+defeito do ORIGINAL: hot start com mais de um registro por bloco trava
+(ver read_old_data.py) -- nos dois lados, no mesmo ponto.
 
 Dependencias externas
 -----------------------
 Reais (reusadas, nao reescritas):
   `functions.met_date`, `functions.map_usda_soiltype_to_uscs`,
   `zerovars.zero_parameters` / `zero_mxl_params`,
-  `initsurface.initsurface`, `initwater.initwater`.
+  `initsurface.initsurface`, `initwater.initwater`,
+  `open_water.open_water`, `read_complex.read_complex`,
+  `read_old_data.read_old_data`, `write_outputs.write_outputs`.
 
-Stubs -- as 5 sub-rotinas que o driver chama e que ainda nao foram
-transcritas. Assinaturas e `intent` conferidos nos `.F90` reais (nao
-inferidos das chamadas), para que a assinatura Python nao mude quando a
-transcricao de verdade chegar:
+As assinaturas Python das quatro ultimas diferem do stub que o driver
+tinha, e as chamadas foram ajustadas:
+  read_old_data(state, iomode, ii, wstart, sdensi, phie, timeo)
+      -> (sdensi, phie); `timeo` volta preenchido NO LUGAR. O driver passa
+      `dstart` em `ii`. `initsurface.py`/`initwater.py` tinham cada um o
+      seu stub; os dois agora importam a real.
+  read_complex(state, wtype, io, wvel, wdepth, sname)
+      -> (wtype, io, lcount, nm0, wvel, wdepth, mtest); `sname` NO LUGAR.
+      O `sort2` que ela chama e o deste arquivo (import dentro da funcao,
+      porque no topo seria circular).
+  open_water(state, ow, wtype, sprint, wvel, wdepth, sdensi, first_loop,
+             code2, code4, oldsd) -> (first_loop, code2, code4, oldsd)
+      `ow` e um `OpenWaterState` com os `save` dela e das rotinas que ela
+      chama; `main` cria UM antes do STEP 4.
+  write_outputs(state, flprint, keep, vegint) -> None (igual ao stub).
+
+Stub -- a unica sub-rotina que o driver chama e que ainda nao foi
+transcrita, com assinatura e `intent` conferidos no `.F90` real:
 
   fasst_main.F90    (586 linhas)  o orquestrador por passo de tempo; e a
-                                  que desbloqueia a execucao ponta a ponta
-  write_outputs.F90 (375 linhas)
-  open_water.F90    (361 linhas)
-  read_complex.F90  (450 linhas)  so no modo multiponto
-  read_old_data.F90 (286 linhas)  stub ja existente em `initsurface.py` --
-                                  importado dali, para nao criar uma
-                                  terceira copia (ha uma em `initwater.py`
-                                  tambem). O driver passa `dstart` na
-                                  posicao que o `.F90` chama `ii` e que o
-                                  stub de `initsurface` chama `mpos`: e o
-                                  mesmo parametro.
+                                  que desbloqueia o caminho de terra
 
-CORRECAO ao paragrafo acima: a assinatura de `read_old_data` E a unica das
-cinco que VAI mudar quando a transcricao chegar. O `.F90` dela faz
-`use fasst_global` de mais de 100 variaveis e ESCREVE em boa parte --
-inclusive `moverlapr`, que o proprio driver le tres linhas depois da
-chamada (`if(jline == 'endr') moverlapr = i`). Como nada disso passa por
-argumento, a versao Python vai precisar de `state` como primeiro
-parametro, no padrao do resto do pacote. O stub herdado de
-`initsurface.py` nao tem esse parametro, e trocar isso mexeria nos
-chamadores em `initsurface.py` e `initwater.py` -- fica para quando
-`read_old_data` for transcrita de verdade. As outras quatro ja recebem
-`state`.
-
-Nota relacionada: `moverlapr` nao e zerado por ninguem -- nem pelo STEP 0,
-nem por `zero_parameters`. Sai de `read_old_data` e fica.
+Nota: `moverlapr` nao e zerado por ninguem -- nem pelo STEP 0, nem por
+`zero_parameters`. Sai de `read_old_data` (modo 3) e fica.
 
 Divergencias deliberadas
 --------------------------
@@ -391,8 +416,15 @@ correspondente do codigo, conforme for preenchido.
 
 Pendencias
 ------------
-* As 5 transcricoes acima. `fasst_main` e a maior e a unica que desbloqueia
-  execucao ponta a ponta.
+* `fasst_main`, a unica das 5 externas ainda stub; desbloqueia o caminho
+  de terra. Quando chegar, ela e `open_water` tem de compartilhar os
+  MESMOS objetos de `save` (`canopy`, `alb`, `lowveg`, `snow` do
+  `OpenWaterState`): no Fortran esses `save` sao das rotinas chamadas, nao
+  de quem chama (ver open_water.py).
+* `_ListaLivre` (read_complex.py) lembra o fim de arquivo por unidade e
+  `_Unit.rewind` nao limpa isso. Sem efeito hoje: o unico EOF que ela ve e
+  o da ultima volta do laco do STEP 4, e depois dele ninguem rebobina a
+  unidade 5.
 * Convencao de unidade de arquivo dividida: `initsurface` assume
   `state.unit*`, `us_soil_tools.get_user_soil_params` recebe `unit90` por
   parametro. O driver passa a preencher `state.unit*`; unificar as duas
@@ -424,9 +456,9 @@ Pendencias
 * Os ganchos `_state`/`_locals` FICAM. A nota do Dia 8 dizia para remove-los
   no Dia 9, "quando `main` rodar ate o fim e essas coisas virarem
   observaveis pelos arquivos de saida" -- `main` agora roda ate o fim, mas a
-  segunda metade da condicao nao se cumpriu: quem escreveria esses arquivos
-  e `write_outputs`, que continua stub. Remover quando as 5 transcricoes
-  acima existirem.
+  segunda metade da condicao so se cumpriu para o caminho de agua:
+  `write_outputs` e real, mas o caminho de terra ainda para no stub de
+  `fasst_main`. Remover quando `fasst_main` existir.
 """
 
 import math
@@ -443,11 +475,10 @@ from .functions import map_usda_soiltype_to_uscs, met_date
 from .zerovars import zero_mxl_params, zero_parameters
 from .initsurface import initsurface
 from .initwater import initwater
-
-# read_old_data.F90 ainda nao foi transcrita; o stub ja existe em
-# initsurface.py (e tambem em initwater.py). Importado dali para nao criar
-# uma terceira copia -- ver "Dependencias externas" na docstring.
-from .initsurface import read_old_data
+from .open_water import OpenWaterState, open_water
+from .read_complex import read_complex
+from .read_old_data import read_old_data
+from .write_outputs import write_outputs
 
 
 # ---------------------------------------------------------------------------
@@ -713,6 +744,11 @@ class _Unit:
     def write(self, s):
         return self.f.write(s)
 
+    def read(self, n):
+        """Bytes crus das unidades binarias (11, 12): `read_old_data` le
+        `access='stream'` por conta propria."""
+        return self.f.read(n)
+
     def read_star(self, n):
         """`read(u,*) v1,...,vn` -- leitura list-directed de `n` itens.
 
@@ -805,8 +841,8 @@ def allocate_run_arrays(state):
 
 
 # ---------------------------------------------------------------------------
-# Dependencias externas ainda sem implementacao (ver docstring).
-# As assinaturas vem dos `.F90` reais, com os `intent` conferidos: os
+# Dependencia externa ainda sem implementacao (ver docstring).
+# A assinatura vem do `.F90` real, com os `intent` conferidos: os
 # parametros `intent(out)`/`intent(inout)` entram na tupla de retorno, no
 # padrao do resto do repo (cf. `initsurface` -> 10-tupla).
 # ---------------------------------------------------------------------------
@@ -826,52 +862,6 @@ def fasst_main(state: FasstState, nprint, sprint, frozen, nstr_flag, sdensi,
     """
     raise NotImplementedError(
         "fasst_main ainda nao foi traduzida (fasst_main.F90)"
-    )
-
-
-def write_outputs(state: FasstState, flprint, keep, vegint):
-    """TODO: write_outputs.F90 (375 linhas) -- escreve as saidas da execucao.
-
-    subroutine write_outputs(flprint,keep,vegint)
-      intent(in) :: flprint,keep,vegint
-
-    Sem `intent(out)`: nao retorna nada.
-    """
-    raise NotImplementedError(
-        "write_outputs ainda nao foi traduzida (write_outputs.F90)"
-    )
-
-
-def open_water(state: FasstState, wtype, sprint, wvel, wdepth, sdensi,
-               first_loop, code2, code4, oldsd):
-    """TODO: open_water.F90 (361 linhas) -- caminho de agua aberta.
-
-    subroutine open_water(wtype,sprint,wvel,wdepth,sdensi,first_loop,
-                          code2,code4,oldsd)
-      intent(in)    :: wtype,sprint,wvel,wdepth,sdensi
-      intent(inout) :: first_loop,code2,code4,oldsd
-
-    Retorno esperado quando transcrita:
-        (first_loop, code2, code4, oldsd)
-    """
-    raise NotImplementedError(
-        "open_water ainda nao foi traduzida (open_water.F90)"
-    )
-
-
-def read_complex(state: FasstState, wtype, io, lcount, nm0, wvel, wdepth,
-                 mtest, sname):
-    """TODO: read_complex.F90 (450 linhas) -- le um registro VITD (multiponto).
-
-    subroutine read_complex(wtype,io,lcount,nm0,wvel,wdepth,mtest,sname)
-      intent(inout) :: wtype,io,wvel,wdepth
-      intent(out)   :: lcount,nm0,mtest,sname(maxl)
-
-    Retorno esperado quando transcrita:
-        (wtype, io, lcount, nm0, wvel, wdepth, mtest, sname)
-    """
-    raise NotImplementedError(
-        "read_complex ainda nao foi traduzida (read_complex.F90)"
     )
 
 
@@ -1897,9 +1887,10 @@ def main(argv=None, _state=None, _locals=None):
 
         j = 1
         while j <= num_frq:
-            (wtype, io, lcount, nm0, wvel, wdepth, mtest,
-             sname) = read_complex(state, wtype, io, lcount, nm0, wvel,
-                                   wdepth, mtest, sname)
+            # `sname` e `intent(out)` mas so tem as camadas `soilt = -1`
+            # atribuidas: e preenchido NO LUGAR (read_complex.py).
+            (wtype, io, lcount, nm0, wvel, wdepth,
+             mtest) = read_complex(state, wtype, io, wvel, wdepth, sname)
             i = 1
             tflag = 0
             while i <= state.met_count and tflag == 0:
@@ -1930,8 +1921,10 @@ def main(argv=None, _state=None, _locals=None):
         # `max(moverlap, istart)`: MOVERLAP e a constante 15 e `istart` vale
         # 2 quando infer_test == 1, entao o resultado e sempre 15.
         wstart = max(MOVERLAP, state.istart)
-        (sdensi, phie, timeo) = read_old_data(d1i, state.dstart, wstart,
-                                              sdensi, phie, timeo)
+        # `timeo` e `intent(out)` e volta preenchido no lugar
+        # (read_old_data.py, modo 3); so `sdensi`/`phie` voltam na tupla.
+        (sdensi, phie) = read_old_data(state, d1i, state.dstart, wstart,
+                                       sdensi, phie, timeo)
 
         for k in range(1, state.moverlapr + 1):
             t1o[k] = 0e0
@@ -2066,6 +2059,11 @@ def main(argv=None, _state=None, _locals=None):
     #
     # NAO fatorar num helper comum: e exatamente esse diff que uma
     # fatoracao destroi. Ver "Arquitetura" na docstring do modulo.
+    #
+    # Os `save` de `open_water` (e das rotinas que ela chama) num objeto so,
+    # criado UMA vez: um `save` do Fortran dura o programa inteiro e
+    # atravessa os registros do laco multiponto -- nunca um por ponto.
+    ow = OpenWaterState()
     if state.single_multi_flag == 0:                      # um ponto so
         i = 1
         tflag = 0
@@ -2187,7 +2185,7 @@ def main(argv=None, _state=None, _locals=None):
                     # casos, porque e o que o original escreve.
                     for state.iw in range(state.istart, state.iend + 1):
                         (first_loop, code2, code4, oldsd) = open_water(
-                            state, wtype, sprint, wvel, wdepth, sdensi,
+                            state, ow, wtype, sprint, wvel, wdepth, sdensi,
                             first_loop, code2, code4, oldsd)
                     # valor final da variavel de laco: o Fortran deixa
                     # `iw = iend + 1` quando o laco roda, e `iw = istart`
@@ -2242,9 +2240,10 @@ def main(argv=None, _state=None, _locals=None):
 
             zero_mxl_params(state)
 
-            (wtype, io, lcount, nm0, wvel, wdepth, mtest,
-             sname) = read_complex(state, wtype, io, lcount, nm0, wvel,
-                                   wdepth, mtest, sname)
+            # `sname` e `intent(out)` mas so tem as camadas `soilt = -1`
+            # atribuidas: e preenchido NO LUGAR (read_complex.py).
+            (wtype, io, lcount, nm0, wvel, wdepth,
+             mtest) = read_complex(state, wtype, io, wvel, wdepth, sname)
 
             i = 1
             tflag = 0
@@ -2350,7 +2349,7 @@ def main(argv=None, _state=None, _locals=None):
 
                         for state.iw in range(state.istart, state.iend + 1):
                             (first_loop, code2, code4, oldsd) = open_water(
-                                state, wtype, sprint, wvel, wdepth, sdensi,
+                                state, ow, wtype, sprint, wvel, wdepth, sdensi,
                                 first_loop, code2, code4, oldsd)
                         # valor final da variavel de laco: o Fortran deixa
                         # `iw = iend + 1` quando o laco roda, e `iw = istart`
@@ -2629,16 +2628,34 @@ def demo():
         f.write("")
     # Os dois arquivos binarios da execucao ANTERIOR, para o caminho de hot
     # start (infer_test == 1). No original o `status='unknown'` os criaria
-    # vazios e `read_old_data` leria de um arquivo vazio; aqui as unidades
-    # 11 e 12 abrem para leitura e a falta e erro -- ver divergencia D1.
-    for _n in ("velho_ro_soil.dat", "velho_ro_time.dat"):
-        with open(os.path.join(d, _n), "wb") as f:
-            f.write(b"")
+    # vazios; aqui as unidades 11 e 12 abrem para leitura e a falta e erro
+    # -- ver divergencia D1.
+    #
+    # O de TEMPOS (unidade 12) nao pode ser vazio: `read_old_data` modo 3
+    # num arquivo vazio e laco infinito no Fortran (`EOFError` aqui, ver
+    # read_old_data.py). O conteudo minimo que termina e um bloco de OUTRO
+    # `freq_id` (-7, que nenhum fixture usa) fechado por 'endr', no formato
+    # `access='stream'`: o modo 3 pula o bloco, ve o fim do arquivo e sai
+    # sem tocar em `timeo` nem em `moverlapr`. O de solo (unidade 11) so e
+    # lido por `initsurface`/`initwater`, posticas neste demo.
+    import struct
+    _VELHO = {"velho_ro_soil.dat": b"",
+              "velho_ro_time.dat": (struct.pack("<i", -7)
+                                    + struct.pack("<4d", 2010.0, 100.0,
+                                                  9.0, 0.0) + b"endr")}
+
+    def _velhos():
+        for _n, _b in _VELHO.items():
+            if not os.path.exists(os.path.join(d, _n)):
+                with open(os.path.join(d, _n), "wb") as f:
+                    f.write(_b)
+
+    _velhos()
     # Nomes que alguns fixtures informam no proprio `.inp` (unidades 90 e 5).
     # `complexo.vitd` tem UMA linha so de proposito: o laco de contagem da
     # linha 1034 faz `num_frq = (linhas + 1) - 2`, entao com 1 linha
-    # `num_frq` sai 0 e o laco de `read_complex` nao roda -- e o unico jeito
-    # de atravessar o STEP 3 multiponto sem bater no stub.
+    # `num_frq` sai 0 e o laco de `read_complex` nao roda -- e o caso
+    # degenerado do ponto de atencao 5, que estes fixtures exercitam.
     for _n in ("meuarquivo.inp", "meusolo.inp"):
         with open(os.path.join(d, _n), "w") as f:
             f.write("")
@@ -2665,10 +2682,7 @@ def demo():
         # da execucao anterior. Sao fixtures compartilhados, entao recria-los
         # a cada execucao e o que impede uma rodada `infer_test == 1` de
         # derrubar todas as seguintes pela divergencia D1.
-        for _n2 in ("velho_ro_soil.dat", "velho_ro_time.dat"):
-            if not os.path.exists(os.path.join(d, _n2)):
-                with open(os.path.join(d, _n2), "wb") as f:
-                    f.write(b"")
+        _velhos()
         saida = _io.StringIO()
         antes = os.getcwd()
         try:
@@ -2682,6 +2696,14 @@ def demo():
                     pass
         finally:
             os.chdir(antes)
+            # Uma execucao que parou no stub de `fasst_main` nao chega ao
+            # STEP 6 e deixa as unidades 11/12 abertas -- e no Windows a
+            # PROXIMA execucao nao consegue apaga-las (ponto 12). O fim do
+            # programa fecharia tudo no Fortran; aqui fecham-se so essas
+            # duas, as unicas que o STEP 6 apaga.
+            for u_ in (st.unit11, st.unit12):
+                if u_ is not None:
+                    u_.close()
         return saida.getvalue()
 
     def _run(linhas, met=None, tolera=()):
@@ -2701,9 +2723,8 @@ def demo():
         execucao ficam em `loc["_step6"]`, e os do fim do bloco de hot
         start em `loc["_hot"]` -- porque o STEP 4 reusa `i`, `k`, `kk`,
         `j`, `tflag` e os `code*`, e o laco de lacunas reusa `t1n`/`t1oo`.
-        Se um stub levantar antes do fim do STEP 3 (e `read_complex`
-        levanta, no modo multiponto), `loc` volta VAZIO -- nesse caso usar
-        `_run` e checar so o estado.
+        Se algo levantar antes do fim do STEP 3, `loc` volta VAZIO -- nesse
+        caso usar `_run` e checar so o estado.
         """
         st, loc = FasstState(), {}
         _exec(linhas, met, st, loc, tolera)
@@ -2730,6 +2751,8 @@ def demo():
     # existe porque `initsurface` chama `missing_met` (ja transcrita, em
     # `fasst/missing_met.py`) e ela faz `state.iend = c3` na linha 343.
     _ajustes = {}
+    # ids dos `OpenWaterState` que o `open_water` postico recebeu
+    _ows = set()
 
     def _registra(nome, state_, extra=None):
         _chamadas.setdefault(nome, []).append(
@@ -2739,7 +2762,7 @@ def demo():
 
     _real = {nome: globals()[nome] for nome in
              ("initsurface", "initwater", "fasst_main", "open_water",
-              "write_outputs", "read_complex")}
+              "write_outputs", "read_complex", "read_old_data")}
 
     def _fake_initsurface(state_, nt0_, nm0_, nprint_, sprint_, sname_,
                           ttest_, mtest_, code1_, phie_, pdens_, oldsd_,
@@ -3557,22 +3580,33 @@ def demo():
     else:
         raise AssertionError("esperado IndexError no laco de lacunas")
 
-    # com mais de uma linha no complexo, `read_complex` e chamada e levanta
+    # com mais de uma linha no complexo, o `read_complex` REAL e chamado.
+    # "registro" nao e inteiro: o `read(5,*,iostat=io)` da `iostat=5010` no
+    # primeiro item e nada e atribuido, entao `freq_id`/`vitd_index` ficam
+    # nos zeros que o proprio read_complex poe antes do read. Nenhum sitio
+    # casa, `fasst_main` nunca e chamada e o programa vai ate o `stop`: o
+    # laco do STEP 4 le os dois registros e sai no EOF da terceira volta.
     vitd3 = os.path.join(d, "tres.vitd")
     with open(vitd3, "w") as f:
         f.write("cabecalho\nregistro 1\nregistro 2\n")
     st, loc = _run_loc(_MULTI.replace("complexo.vitd", "tres.vitd"))
-    assert loc == {}, "read_complex deveria ter levantado antes da captura"
-    assert st.unit5 is not None      # mas as unidades ja estavam abertas
+    assert loc["num_frq"] == 2
+    fim = loc["_step6"]
+    assert fim["tempcount"] == 3 and fim["io"] == -1 and fim["tflag"] == 0
+    assert st.freq_id == 0 and st.vitd_index == 0
 
     # ---- hot start (infer_test == 1): unidades 11 e 12 ----
     _HOT = ("@MET@ !\n1 0 0.5 1 !\nvelho_ro_soil.dat ! ro1o\n"
             "1.5 0.0 1 1 0 100 0 !\n1234 !\n" + "saida.fst !\n" * 5 +
             "0.0 0.0 !\n0.01 !\n0 !\n")
     st, loc = _run_loc(_HOT)
-    # `read_old_data` e stub e levanta, entao a captura nao acontece --
-    # mas as unidades 11 e 12 ja foram abertas antes dela
-    assert loc == {}
+    # `read_old_data` REAL, modo 3, sobre o fixture de tempos: o unico bloco
+    # e de outro `freq_id` (-7), entao ele e pulado ate o 'endr', o EOF
+    # encerra o laco externo e nem `timeo` nem `moverlapr` sao tocados.
+    # Com `moverlapr == 0` a busca de `mpos` nao roda e cai no
+    # `mpos = moverlapr` -- isto e, 0.
+    assert all(v == 0.0 for linha_ in loc["timeo"] for v in linha_)
+    assert st.moverlapr == 0 and st.mpos == 0
     assert st.unit11 is not None and st.unit12 is not None
     assert st.istart == 2
     # ponto de atencao 11: o nome da unidade 12 vem de cortar 9 caracteres
@@ -3589,7 +3623,7 @@ def demo():
     with open(os.path.join(d, nome_curto), "wb") as f:
         f.write(b"")
     with open(os.path.join(d, "_time.dat"), "wb") as f:
-        f.write(b"")
+        f.write(_VELHO["velho_ro_time.dat"])     # vazio seria laco infinito
     st, loc = _run_loc(_HOT.replace("velho_ro_soil.dat", nome_curto))
     assert st.unit12.path == "_time.dat"     # len("curto.dat") - 9 == 0
 
@@ -3604,10 +3638,10 @@ def demo():
         assert f.read() == ""
 
     # ---- o resto do bloco de hot start, com `read_old_data` postico ----
-    # Com o stub real a execucao levanta na linha 1069 e nada depois dela e
-    # alcancavel: a chamada em si, o laco de `t1o`, o `t1n` e a busca de
-    # `mpos`. Trocar a funcao por uma que registra os argumentos e devolve
-    # um `timeo` sintetico cobre os quatro.
+    # A real, sobre o fixture de tempos, nao casa `freq_id` e nao preenche
+    # `timeo` (ver acima). Trocar a funcao por uma que registra os
+    # argumentos e preenche um `timeo` sintetico exercita o resto: a
+    # chamada em si, o laco de `t1o`, o `t1n` e a busca de `mpos`.
     _rod_real = globals()["read_old_data"]
 
     def _hot(horas, met=None, hot=None):
@@ -3619,15 +3653,17 @@ def demo():
         """
         chamadas = []
 
-        def _falso(d1i_, ii_, wstart_, sdensi_, phie_, timeo_):
+        def _falso(state_, d1i_, ii_, wstart_, sdensi_, phie_, timeo_):
+            inspect.signature(_rod_real).bind(
+                state_, d1i_, ii_, wstart_, sdensi_, phie_, timeo_)
             chamadas.append((d1i_, ii_, wstart_, sdensi_, phie_, timeo_))
-            t = [[0.0] * 5 for _ in range(MOVERLAP + 1)]
+            # `timeo` e `intent(out)`: a real o preenche NO LUGAR
             for kk_, hr_ in enumerate(horas, start=1):
-                t[kk_][1] = 2010.0
-                t[kk_][2] = 100.0
-                t[kk_][3] = float(hr_)
-                t[kk_][4] = 0.0
-            return 123.0, 0.5, t
+                timeo_[kk_][1] = 2010.0
+                timeo_[kk_][2] = 100.0
+                timeo_[kk_][3] = float(hr_)
+                timeo_[kk_][4] = 0.0
+            return 123.0, 0.5
 
         semente, loc = FasstState(), {}
         semente.moverlapr = len(horas)
@@ -3869,13 +3905,11 @@ def demo():
         import inspect
         chamadas = []
 
-        def _falso(state_, wtype_, io_, lcount_, nm0_, wvel_, wdepth_,
-                   mtest_, sname_):
+        def _falso(state_, wtype_, io_, wvel_, wdepth_, sname_):
             # `bind` contra a assinatura REAL: sem isto o postico
             # esconderia um erro de aridade na chamada do driver.
             inspect.signature(_rc_real).bind(
-                state_, wtype_, io_, lcount_, nm0_, wvel_, wdepth_,
-                mtest_, sname_)
+                state_, wtype_, io_, wvel_, wdepth_, sname_)
             # `maxlines` so deixa de ser 0 depois da alocacao, que
             # fecha o STEP 3 -- e o que separa as chamadas do laco do
             # STEP 3 (1036-1050) das do laco do STEP 4 (1294).
@@ -3892,8 +3926,8 @@ def demo():
             # `io = -1` assim que o STEP 3 termina: e o que faz o
             # `while io != -1` do STEP 4 rodar o corpo UMA vez e sair,
             # igual ao EOF do `read` real.
-            return (wtype_, 0 if no_step3 else -1, lcount_, nm0_, wvel_,
-                    wdepth_, mtest_, sname_)
+            return (wtype_, 0 if no_step3 else -1, 0, 0, wvel_,
+                    wdepth_, "n")
 
         nome = "multi%d.vitd" % nlinhas
         with open(os.path.join(d, nome), "w") as f:
@@ -3983,11 +4017,13 @@ def demo():
     assert st.maxlines == st.iend + 1 + 4 + 1
 
     # ---- STEP 4 e STEP 6 (linhas 1156-1480) ----
-    # Aqui `main` roda do inicio ao FIM. Os quatro externos que ainda
-    # faltam (`fasst_main`, `open_water`, `write_outputs`,
-    # `read_complex`) viram posticos que REGISTRAM a chamada, e
-    # `read_old_data` tambem -- assim os dois lacos principais, o
-    # despacho por `water_flag` e o STEP 6 ficam observaveis.
+    # Aqui `main` roda do inicio ao FIM. Os cinco externos (`fasst_main`,
+    # que ainda e stub, e `open_water`, `write_outputs`, `read_complex`,
+    # `read_old_data`, que ja sao reais) viram posticos que REGISTRAM a
+    # chamada -- assim os dois lacos principais, o despacho por
+    # `water_flag` e o STEP 6 ficam observaveis sem depender da fisica.
+    # O que as reais escrevem e conferido contra o Fortran compilado, nao
+    # aqui (ver "Verificacao contra o Fortran" na docstring).
     #
     # Cada postico confere a aridade contra a assinatura real; e por isso
     # que estes fixtures pegariam um erro na lista de argumentos, que e
@@ -4022,6 +4058,7 @@ def demo():
         """
         _chamadas.clear()
         _ajustes.clear()
+        _ows.clear()
         _ajustes["iend"] = iend_apos
         cont = {"rc3": 0, "rc4": 0}
 
@@ -4037,11 +4074,14 @@ def demo():
             return (codes[0], codes[1], codes[2], code5_, 1, phie_,
                     pdens_, oldsd_, oldhi_)
 
-        def _ow(state_, wtype_, sprint_, wvel_, wdepth_, sdensi_,
+        def _ow(state_, ow_, wtype_, sprint_, wvel_, wdepth_, sdensi_,
                 first_loop_, code2_, code4_, oldsd_):
             inspect.signature(_real["open_water"]).bind(
-                state_, wtype_, sprint_, wvel_, wdepth_, sdensi_,
+                state_, ow_, wtype_, sprint_, wvel_, wdepth_, sdensi_,
                 first_loop_, code2_, code4_, oldsd_)
+            assert isinstance(ow_, OpenWaterState)
+            # UM objeto `save` por execucao, nunca um por ponto
+            _ows.add(id(ow_))
             _registra("open_water", state_,
                       extra=(wtype_, wvel_, wdepth_, first_loop_))
             return (1, code2_, code4_, oldsd_)
@@ -4052,11 +4092,9 @@ def demo():
             _registra("write_outputs", state_,
                       extra=(flprint_, keep_, vegint_))
 
-        def _rc(state_, wtype_, io_, lcount_, nm0_, wvel_, wdepth_,
-                mtest_, sname_):
+        def _rc(state_, wtype_, io_, wvel_, wdepth_, sname_):
             inspect.signature(_real["read_complex"]).bind(
-                state_, wtype_, io_, lcount_, nm0_, wvel_, wdepth_,
-                mtest_, sname_)
+                state_, wtype_, io_, wvel_, wdepth_, sname_)
             no_step3 = state_.maxlines == 0
             cont["rc3" if no_step3 else "rc4"] += 1
             _registra("read_complex", state_, extra=dict(cont))
@@ -4065,16 +4103,16 @@ def demo():
                 state_.water_flag = wflag
             state_.freq_id = 100 + cont["rc3"] + cont["rc4"]
             io2 = 0 if (no_step3 or cont["rc4"] < nvitd4) else -1
-            return (wtype_, io2, lcount_, nm0_, wvel_, wdepth_, mtest_,
-                    sname_)
+            return (wtype_, io2, 0, 0, wvel_, wdepth_, "n")
 
-        def _rod(d1i_, ii_, wstart_, sdensi_, phie_, timeo_):
-            t = [[0.0] * 5 for _ in range(MOVERLAP + 1)]
+        def _rod(state_, d1i_, ii_, wstart_, sdensi_, phie_, timeo_):
+            inspect.signature(_real["read_old_data"]).bind(
+                state_, d1i_, ii_, wstart_, sdensi_, phie_, timeo_)
             for kk_, hr_ in enumerate((10, 11, 13, 14), start=1):
-                t[kk_][1] = 2010.0
-                t[kk_][2] = 100.0
-                t[kk_][3] = float(hr_)
-            return 1.0, 0.0, t
+                timeo_[kk_][1] = 2010.0
+                timeo_[kk_][2] = 100.0
+                timeo_[kk_][3] = float(hr_)
+            return 1.0, 0.0
 
         salvos = {}
         for nome_, f_ in (("fasst_main", _fm), ("open_water", _ow),

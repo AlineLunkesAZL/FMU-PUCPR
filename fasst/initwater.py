@@ -33,11 +33,8 @@ execucao.
 `met_date` e real e pura, importada de `fasst.functions`. `missing_met`
 tambem e real, importada de `fasst.missing_met` (as sub-rotinas que
 chama -- sol_zen, Solflx, emisatm, dnirflx -- ja estao resolvidas em
-`fasst.module_radiation`). `read_old_data` continua sem implementacao
-conhecida -- e um stub de modulo (levanta `NotImplementedError`),
-duplicado neste arquivo e nao importado de `initsurface.py` (mesma
-convencao de nao compartilhar infraestrutura entre arquivos deste
-projeto, ver `_anint`/`_fdiv`).
+`fasst.module_radiation`). `read_old_data` e real, importada
+de `fasst.read_old_data`.
 
 Indexacao 1-based identica ao Fortran em todos os vetores/matrizes
 (posicao 0 sem uso), com os mesmos indices (i, j, ...) do original.
@@ -70,6 +67,7 @@ from .indices import MetCol
 from .state import FasstState
 from .functions import met_date
 from .missing_met import missing_met
+from .read_old_data import read_old_data
 
 
 def _new_array(n, fill=0.0):
@@ -95,14 +93,6 @@ def _anint(x, p=0):
     xs = x * (10.0**p)
     ai = math.copysign(math.floor(abs(xs) + 0.5), xs)
     return ai * (10.0**-p)
-
-
-# ---------------------------------------------------------------------------
-# Dependencias externas ainda sem implementacao conhecida (ver docstring)
-# ---------------------------------------------------------------------------
-def read_old_data(d1i, mpos, wstart, sdensi, phie, timeo):
-    """TODO: funcao externa -- recupera sdensi/phie/timeo de uma execucao anterior (multi-run)."""
-    raise NotImplementedError("read_old_data ainda nao foi traduzida (funcao externa)")
 
 
 def initwater(state: FasstState, sprint, phie, pdens, oldsd, oldhi, sdensi):
@@ -140,7 +130,7 @@ def initwater(state: FasstState, sprint, phie, pdens, oldsd, oldhi, sdensi):
         d1i = 1
         wstart = max(MOVERLAP, state.istart)
         timeo = [[0.0] * 5 for _ in range(MOVERLAP + 1)]  # timeo(moverlap,4)
-        sdensi, phie = read_old_data(d1i, state.mpos, wstart, sdensi, phie, timeo)
+        sdensi, phie = read_old_data(state, d1i, state.mpos, wstart, sdensi, phie, timeo)
 
         for i in range(1, MAXCOL + 1):
             met1[i] = state.met[state.istart - 1][i]
