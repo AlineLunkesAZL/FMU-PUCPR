@@ -38,8 +38,8 @@ Fan-in 1: o unico chamador e fasst_main.F90:343, dentro de
 
     if(dabs(hsaccum) <= eps) call icethick(oldhi,hi)
 
-ou seja, `hinit` = `oldhi` e `hfinal` -> `hi`. Como `fasst_main.F90`
-ainda nao foi transcrito, o call site Python ainda nao existe.
+ou seja, `hinit` = `oldhi` e `hfinal` -> `hi`. O call site Python e
+`fasst_main.step5` (STEP 5): `state.hi = icethick(state, oldhi)`.
 
 A ZERAGEM INICIAL E OBRIGATORIA (linhas 25-34), NAO E CERIMONIA
 ------------------------------------------------------------------

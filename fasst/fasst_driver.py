@@ -421,6 +421,9 @@ Pendencias
   MESMOS objetos de `save` (`canopy`, `alb`, `lowveg`, `snow` do
   `OpenWaterState`): no Fortran esses `save` sao das rotinas chamadas, nao
   de quem chama (ver open_water.py).
+  Os STEPS 3a, 4 e 5 ja estao em `fasst/fasst_main.py` (`step3a`, `step4`,
+  `step5`, mais `FasstMainState`, cujo `snow` deve ser o `ow.snow`); faltam
+  os STEPS 1, 2, 3 e 6 e o corpo que os encadeia.
 * `_ListaLivre` (read_complex.py) lembra o fim de arquivo por unidade e
   `_Unit.rewind` nao limpa isso. Sem efeito hoje: o unico EOF que ela ve e
   o da ultima volta do laco do STEP 4, e depois dele ninguem rebobina a
