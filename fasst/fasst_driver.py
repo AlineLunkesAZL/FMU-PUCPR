@@ -112,8 +112,10 @@ agua). Diferencas restantes, nenhuma do driver:
   * `sgralbedo` e `stor(6)` em `_ro_soil.dat` no caso com dossel: NaN no
     Fortran, 0.0 aqui, calculados em `module_canopy`/`albedo_emis` --
     PENDENTE daqueles modulos;
-  * o `.snw` (unidade 55): `snow.py` omite a escrita de proposito
-    (snow.py:302) -- PENDENTE daquele modulo.
+  * o `.snw` (unidade 55): 1 byte nas linhas que `snow_model` grava
+    antes de qualquer atribuicao a `meltfl` -- NUL no Fortran (o
+    gfortran zera a global indefinida), branco aqui (regra D2; ver
+    snow.py, escrita do `format 91`).
 A comparacao achou e corrigiu, fora do driver: `module_lowveg.py` testava
 `iw != 0`/`iw >= 1` onde o Fortran tem `iw /= 1`/`iw >= 2` (como se `iw`
 fosse 0-based), e `state.avect` tinha uma posicao a menos. E mostrou um

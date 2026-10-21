@@ -93,6 +93,7 @@ ponto do código.
 """
 
 import math
+import re
 from dataclasses import dataclass
 
 import numpy as np
@@ -146,6 +147,16 @@ def _fdiv(x: float, y: float) -> float:
     """
     with np.errstate(divide="ignore", invalid="ignore"):
         return float(np.float64(x) / np.float64(y))
+
+
+def _list_items(line: str) -> list:
+    """Itens de um registro lido com ``read(u,*)``: separados por virgula
+    e/ou branco, com o expoente ``d`` do Fortran. As tabelas de vegetacao
+    usam os dois (``500d0, 120d0,`` e ``0.20d0,0.5d0``). O que vem depois
+    do 18o item (o comentario ``!crops``) o `read` descarta; aqui o
+    chamador so le os 18 primeiros."""
+    s = line.replace("d", "e").replace("D", "e")
+    return [t for t in re.split(r"[\s,]+", s) if t]
 
 
 # ---------------------------------------------------------------------------
@@ -708,7 +719,7 @@ def veg_propl(
     # Lê os cabeçalhos de entrada (linhas 1 a 36 no Fortran)
     lines = file_unit_31_data[36:]
     for line in lines:
-        parts = line.split()
+        parts = _list_items(line)
         if not parts:
             continue
         vid = int(parts[0])
@@ -755,7 +766,7 @@ def veg_propl(
         lines_biome = file_unit_biome_data[hlines:]
 
         for line in lines_biome:
-            parts = line.split()
+            parts = _list_items(line)
             if not parts:
                 continue
             vid = int(parts[0])

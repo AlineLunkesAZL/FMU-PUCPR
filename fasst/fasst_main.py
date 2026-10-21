@@ -106,9 +106,8 @@ Pontos de atencao (comportamento do original preservado)
    `surfci/surfrci/surfcbr(iw)` ficam com o que `zero_mxl_params` deixou.
 8. O `format 91` daqui (335) NAO e o de `open_water.F90`: e
    `(i10,2x,f10.3,8(f15.8),a5,3(f15.8))`, com o ANO na frente e 14 valores.
-   `meltfl` (len=1) sai alinhado a direita em `a5`. Como `snow.py` omite a
-   escrita da unidade 55 (snow.py:302), o `.snw` so recebe as linhas dos
-   ramos sem neve -- pendencia de snow.py.
+   `meltfl` (len=1) sai alinhado a direita em `a5`. A linha dos ramos COM
+   neve e a do `format 91` de `module_snow`, escrita por `snow.py`.
 9. O bloco de gelo de superficie (342) testa so `ip_pt` (2 = chuva, 4 =
    chuva congelante), nunca `ip_pt2`.
 """

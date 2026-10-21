@@ -93,11 +93,10 @@ Numeric-idiom helpers
   :func:`depth` and :func:`collide` set ``f1 = 1/(n-1)`` (positive). Same
   name, same ``n``, inverted. Not factored into a shared helper.
 
-I/O: this module performs NO file I/O. Fortran ``snow_model`` writes a
-diagnostic line to unit 55 when ``sprint == 1`` (lines 236-246); ``dates``
-and ``wet`` are computed only for that write, and line 240 is already
-commented out upstream. The ``sprint`` parameter is kept for signature
-parity and the write is skipped.
+I/O: the only file I/O is the diagnostic line ``snow_model`` writes to
+``state.unit55`` when ``sprint == 1`` (lines 236-246, ``format 91``);
+``dates`` and ``wet`` are computed only for that write, and line 240 is
+already commented out upstream.
 
 ``dmet1`` columns are used by raw index with an inferred-meaning comment
 (3 = wind speed, 4 = air temperature [K], 6 = rain SWE [cm-equiv], 7 = snow
@@ -126,6 +125,7 @@ from .constants import (
 from .functions import Phase, dense, spheats
 from .indices import MetCol
 from .state import FasstState
+from .write_outputs import _fmt_f, _fmt_i
 
 __all__ = ["SnowState", "snow_model", "PERMEABILITY_EXPONENT"]
 
@@ -299,8 +299,7 @@ def snow_model(
     Args:
         state: model global state (``met``, ``dmet1``, ``stt``, ``sn_stat``, ...).
         snow: persistent pack state (mutated in place).
-        sprint: 1 -> Fortran writes a unit-55 diagnostic line; the write is
-            omitted here (see module docstring), the flag is kept for parity.
+        sprint: 1 -> writes a diagnostic line to ``state.unit55``.
         water_flag: 0 -> land (soil heat flux from the profile); else -> ice.
         first_snow: 0 -> (re)initialize the pack this call; returned as 1.
         sdensi: initial snow density (kg/m^3), used only when ``first_snow == 0``.
@@ -420,8 +419,25 @@ def snow_model(
 
     v = shoveout(state, snow, timestp, snow.kappa, snow.n, snow.maxwet, snow.d)
 
-    # sprint == 1: Fortran writes met/depth/melt terms to unit 55 here.
-    # Omitted (see module docstring); no state depends on it.
+    # print out snow information (module_snow.F90:235-246)
+    if sprint == 1:
+        dates = met[iw, MetCol.DOY] + met[iw, MetCol.HR] / 24.0 + met[iw, MetCol.MIN] / (24.0 * 60.0)
+        wet = 0.0  # Fortran zeroes it on every call (line 109)
+        if snow.sd > EPS:
+            wet = snow.maxwet / snow.sd
+        # format 91: (i10,2x,f10.3,8(f15.8),a5,3(f15.8))
+        # `meltfl` ainda nao atribuido (nenhum `meltfl = ...` rodou antes)
+        # sai em BRANCO aqui; o gfortran grava `\x00`, porque zera a
+        # variavel `save` de fasst_global que o padrao deixa indefinida.
+        # Divergencia deliberada, regra D2 do driver (nao inicializada ->
+        # branco explicito). E a UNICA diferenca do `.snw` contra o Fortran
+        # em cmp_fortran_agua.py: 1 byte nessas linhas.
+        state.unit55.write(
+            _fmt_i(int(met[iw, MetCol.YEAR]), 10) + "  " + _fmt_f(dates, 10, 3)
+            + "".join(_fmt_f(x, 15, 8) for x in
+                      (snow.sdold, add, meta, dwind, atop, abot, snow.sd, snow.sd - snow.sdold))
+            + state.meltfl.rjust(5)
+            + "".join(_fmt_f(x, 15, 8) for x in (snow.d, snow.swe, wet)) + "\n")
 
     if snow.sd < HT_MINM * 1e2:
         abot1 = abot1 + snow.sd * snow.rho
