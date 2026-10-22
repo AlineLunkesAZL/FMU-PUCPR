@@ -65,7 +65,8 @@ O driver e o dono de tres coisas que nenhum outro modulo pode assumir:
 
 Estado desta transcricao
 --------------------------
-Cronograma de 10 dias uteis CONCLUIDO; falta so `fasst_main` (ver abaixo).
+Cronograma de 10 dias uteis CONCLUIDO, e as 5 dependencias externas ligadas
+(`fasst_main` ainda parcial, ver abaixo).
   Dia 1  esqueleto, docstring, os 5 stubs externos
   Dia 2  `_Unit`/`_strip_comment`, secao de declaracoes, STEP 0 e o
          cabecalho de `fassti.inp` (linhas 109-266)
@@ -83,14 +84,16 @@ Cronograma de 10 dias uteis CONCLUIDO; falta so `fasst_main` (ver abaixo).
   Dia 10 `docs/doc-transcricao-fasst_driver.docx`
   depois  integracao das 4 dependencias externas transcritas
           (`open_water`, `read_complex`, `read_old_data`,
-          `write_outputs`), conferida contra o FASST compilado  <-- aqui
+          `write_outputs`), conferida contra o FASST compilado
+  depois  `fasst_main` ligada (STEPS 3a, 4, 5 e 6; os STEPS 1, 2 e 3
+          sao stubs, com outro integrante da equipe)           <-- aqui
 
 O `program` esta TRANSCRITO DE PONTA A PONTA: `main()` roda do primeiro
-registro de `fassti.inp` ao `stop` da linha 1479. Das 5 sub-rotinas
-externas, 4 ja sao reais; falta so `fasst_main`, que continua stub. Por
-isso o caminho de AGUA (`water_flag == 3`: `initwater` -> `open_water` ->
-`write_outputs`, que nunca chama `fasst_main`) ja roda inteiro em Python,
-e o de terra ainda para no stub.
+registro de `fassti.inp` ao `stop` da linha 1479, e as 5 sub-rotinas
+externas sao reais. O caminho de AGUA (`water_flag == 3`: `initwater` ->
+`open_water` -> `write_outputs`) roda inteiro em Python; o de TERRA
+(`initsurface` -> `fasst_main` -> `write_outputs`) para no stub do STEP 1
+de `fasst_main` ate os STEPS 1, 2 e 3 serem transcritos.
 
 Verificacao contra o Fortran: `cmp_fortran_agua.py` (raiz do repo, nao
 versionado) compila o FASST original com gfortran (TDM-GCC, `-O0`) e roda
@@ -103,9 +106,8 @@ binarios que o PROPRIO Fortran escreveu no primeiro -- `read_old_data`
 modos 3 e 1. Sairam IDENTICOS byte a byte: unidade 2 (`.fst`, FORMAT
 1000/1001), unidade 28 (`.vgt`, FORMAT 1004 e a interpolacao de `t1`),
 `inferred.out` e os dois binarios de hot start (`access='stream'`). Nao
-verificado: a unidade 24 (`.flx` sai so com o cabecalho -- o corpo exige
-`water_flag <= 1`, logo `fasst_main`) e o `.grd` (vazio no caminho de
-agua). Diferencas restantes, nenhuma do driver:
+verificado: o caminho de terra inteiro (para nos stubs de `fasst_main`),
+logo a unidade 24 (`.flx` com corpo) e o `.grd`. Diferencas restantes, nenhuma do driver:
   * `phie` em `_ro_soil.dat` no caso sem neve: local nao inicializada de
     `open_water`, lixo de pilha no Fortran, 0.0 aqui (ponto 3 de
     open_water.py);
@@ -131,7 +133,9 @@ Reais (reusadas, nao reescritas):
   `open_water.open_water`, `read_complex.read_complex`,
   `read_old_data.read_old_data`, `write_outputs.write_outputs`.
 
-As assinaturas Python das quatro ultimas diferem do stub que o driver
+  `fasst_main.fasst_main`.
+
+As assinaturas Python das cinco ultimas diferem do stub que o driver
 tinha, e as chamadas foram ajustadas:
   read_old_data(state, iomode, ii, wstart, sdensi, phie, timeo)
       -> (sdensi, phie); `timeo` volta preenchido NO LUGAR. O driver passa
@@ -146,12 +150,10 @@ tinha, e as chamadas foram ajustadas:
       `ow` e um `OpenWaterState` com os `save` dela e das rotinas que ela
       chama; `main` cria UM antes do STEP 4.
   write_outputs(state, flprint, keep, vegint) -> None (igual ao stub).
-
-Stub -- a unica sub-rotina que o driver chama e que ainda nao foi
-transcrita, com assinatura e `intent` conferidos no `.F90` real:
-
-  fasst_main.F90    (586 linhas)  o orquestrador por passo de tempo; e a
-                                  que desbloqueia o caminho de terra
+  fasst_main(state, fm, nprint, ..., oldhi) -> a mesma 9-tupla do stub;
+      `fm` e um `FasstMainState` com os `save` dela e de `new_profile`,
+      criado junto do `ow` e com `snow`/`canopy`/`alb`/`lowveg`
+      COMPARTILHADOS com ele (no Fortran sao `save` das rotinas chamadas).
 
 Nota: `moverlapr` nao e zerado por ninguem -- nem pelo STEP 0, nem por
 `zero_parameters`. Sai de `read_old_data` (modo 3) e fica.
@@ -419,14 +421,9 @@ correspondente do codigo, conforme for preenchido.
 
 Pendencias
 ------------
-* `fasst_main`, a unica das 5 externas ainda stub; desbloqueia o caminho
-  de terra. Quando chegar, ela e `open_water` tem de compartilhar os
-  MESMOS objetos de `save` (`canopy`, `alb`, `lowveg`, `snow` do
-  `OpenWaterState`): no Fortran esses `save` sao das rotinas chamadas, nao
-  de quem chama (ver open_water.py).
-  Os STEPS 3a, 4 e 5 ja estao em `fasst/fasst_main.py` (`step3a`, `step4`,
-  `step5`, mais `FasstMainState`, cujo `snow` deve ser o `ow.snow`); faltam
-  os STEPS 1, 2, 3 e 6 e o corpo que os encadeia.
+* STEPS 1, 2 e 3 de `fasst_main` (stubs em fasst/fasst_main.py, com outro
+  integrante da equipe); desbloqueiam o caminho de terra, que depois tem
+  de ser conferido contra o FASST compilado.
 * `makemtagroundout` / `makemtafasstout` (1428-1430) estao comentadas no
   proprio Fortran. Nao transcrever.
 * VALOR FINAL DE VARIAVEL DE LACO -- conferir em cada dia que falta. Um
@@ -447,12 +444,13 @@ Pendencias
   valor final explicito (`iend + 1`, ou `istart` quando o laco nao roda).
 * O STEP 4 nao tem `do while` cuja variavel saia errada: os dois usam
   incremento explicito, igual ao original.
-* Os ganchos `_state`/`_locals` FICAM. A nota do Dia 8 dizia para remove-los
-  no Dia 9, "quando `main` rodar ate o fim e essas coisas virarem
-  observaveis pelos arquivos de saida" -- `main` agora roda ate o fim, mas a
-  segunda metade da condicao so se cumpriu para o caminho de agua:
-  `write_outputs` e real, mas o caminho de terra ainda para no stub de
-  `fasst_main`. Remover quando `fasst_main` existir.
+* Os ganchos `_state`/`_locals` FICAM, por ora. A nota do Dia 8 dizia para
+  remove-los "quando `main` rodar ate o fim e essas coisas virarem
+  observaveis pelos arquivos de saida" -- `main` agora roda ate o fim, mas
+  a segunda metade so se cumpre no caminho de agua: o de terra para nos
+  stubs dos STEPS 1-3 de `fasst_main`. E o `demo()` le por eles centenas de asserts sobre locais do
+  `program` (ponto 5, `_step6`, ...) que nenhum arquivo de saida mostra;
+  tira-los e reescrever esse demo. Decisao em aberto.
 """
 
 import math
@@ -469,6 +467,7 @@ from .functions import map_usda_soiltype_to_uscs, met_date
 from .zerovars import zero_mxl_params, zero_parameters
 from .initsurface import initsurface
 from .initwater import initwater
+from .fasst_main import FasstMainState, fasst_main
 from .open_water import OpenWaterState, open_water
 from .read_complex import _APOS_EOF, read_complex
 from .read_old_data import read_old_data
@@ -837,31 +836,6 @@ def allocate_run_arrays(state):
     state.dmet1 = _reals2(n, 13)                 # dmet1(maxlines,13)
     state.airt = _reals2(2, n)                   # airt(2,maxlines)
     state.canopy_temp = _reals2(NCLAYERS, n)     # canopy_temp(nclayers,maxlines)
-
-
-# ---------------------------------------------------------------------------
-# Dependencia externa ainda sem implementacao (ver docstring).
-# A assinatura vem do `.F90` real, com os `intent` conferidos: os
-# parametros `intent(out)`/`intent(inout)` entram na tupla de retorno, no
-# padrao do resto do repo (cf. `initsurface` -> 10-tupla).
-# ---------------------------------------------------------------------------
-def fasst_main(state: FasstState, nprint, sprint, frozen, nstr_flag, sdensi,
-               surfdepth, code2, code3, code4, code5, first_loop, phie,
-               pdens, oldsd, oldhi):
-    """TODO: fasst_main.F90 (586 linhas) -- orquestrador por passo de tempo.
-
-    subroutine fasst_main(nprint,sprint,frozen,nstr_flag,sdensi,surfdepth,
-                          code2,code3,code4,code5,first_loop,phie,pdens,
-                          oldsd,oldhi)
-      intent(in)    :: nprint,sprint,frozen,nstr_flag(maxn),sdensi,surfdepth
-      intent(inout) :: code2,code3,code4,code5,first_loop,phie,pdens,oldsd,oldhi
-
-    Retorno esperado quando transcrita:
-        (code2, code3, code4, code5, first_loop, phie, pdens, oldsd, oldhi)
-    """
-    raise NotImplementedError(
-        "fasst_main ainda nao foi traduzida (fasst_main.F90)"
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -2063,6 +2037,10 @@ def main(argv=None, _state=None, _locals=None):
     # criado UMA vez: um `save` do Fortran dura o programa inteiro e
     # atravessa os registros do laco multiponto -- nunca um por ponto.
     ow = OpenWaterState()
+    # e os de `fasst_main`, que compartilha com `open_water` os `save` das
+    # rotinas que as duas chamam (canopy_met, albedo_emis, lowveg_met, snow)
+    fm = FasstMainState(snow=ow.snow, canopy=ow.canopy, alb=ow.alb,
+                        lowveg=ow.lowveg)
     if state.single_multi_flag == 0:                      # um ponto so
         i = 1
         tflag = 0
@@ -2130,7 +2108,7 @@ def main(argv=None, _state=None, _locals=None):
                     for state.iw in range(state.istart, state.iend + 1):
                         (code2, code3, code4, code5, first_loop, phie,
                          pdens, oldsd, oldhi) = fasst_main(
-                            state, nprint, sprint, frozen, nstr_flag,
+                            state, fm, nprint, sprint, frozen, nstr_flag,
                             sdensi, surfdepth, code2, code3, code4, code5,
                             first_loop, phie, pdens, oldsd, oldhi)
                         # as 6 linhas de `pest(iw,·)` estao comentadas no
@@ -2248,7 +2226,10 @@ def main(argv=None, _state=None, _locals=None):
             tflag = 0
             while i <= state.met_count and tflag == 0:
                 if state.vitd_index == vitd_indexm[i]:
-                    print(" Running case%12d of%12d freq_id = %12d"
+                    # list-directed do gfortran: branco no inicio do
+                    # registro, I12, e um branco antes de texto que segue um
+                    # numero (conferido no TDM-GCC)
+                    print("  Running case%12d  of%12d  freq_id = %12d"
                           % (tempcount, num_frq, state.freq_id))
 
                     tflag = 1
@@ -2307,7 +2288,7 @@ def main(argv=None, _state=None, _locals=None):
                         for state.iw in range(state.istart, state.iend + 1):
                             (code2, code3, code4, code5, first_loop, phie,
                              pdens, oldsd, oldhi) = fasst_main(
-                                state, nprint, sprint, frozen, nstr_flag,
+                                state, fm, nprint, sprint, frozen, nstr_flag,
                                 sdensi, surfdepth, code2, code3, code4,
                                 code5, first_loop, phie, pdens, oldsd,
                                 oldhi)
@@ -2695,7 +2676,7 @@ def demo():
                     pass
         finally:
             os.chdir(antes)
-            # Uma execucao que parou no stub de `fasst_main` nao chega ao
+            # Uma execucao que parou no postico de `fasst_main` nao chega ao
             # STEP 6 e deixa as unidades 11/12 abertas -- e no Windows a
             # PROXIMA execucao nao consegue apaga-las (ponto 12). O fim do
             # programa fecharia tudo no Fortran; aqui fecham-se so essas
@@ -2786,8 +2767,17 @@ def demo():
         _registra("initwater", state_)
         return (phie_, pdens_, oldsd_, oldhi_, sdensi_)   # initwater.py:276
 
+    def _fake_fasst_main(state_, *args):
+        # `fasst_main` e real desde a integracao, mas precisa do perfil que
+        # o `initsurface` REAL monta; com o postico acima o estado esta
+        # vazio. Os casos que nao trocam `fasst_main` (abaixo, `_completo`)
+        # param aqui, como paravam no stub.
+        inspect.signature(_real["fasst_main"]).bind(state_, *args)
+        raise NotImplementedError("fasst_main (postico do demo)")
+
     globals()["initsurface"] = _fake_initsurface
     globals()["initwater"] = _fake_initwater
+    globals()["fasst_main"] = _fake_fasst_main
 
     _CABECALHO = (
         "@MET@                        ! met\n"
@@ -4015,7 +4005,7 @@ def demo():
 
     # ---- STEP 4 e STEP 6 (linhas 1156-1480) ----
     # Aqui `main` roda do inicio ao FIM. Os cinco externos (`fasst_main`,
-    # que ainda e stub, e `open_water`, `write_outputs`, `read_complex`,
+    # que precisa do perfil do `initsurface` real, e `open_water`, `write_outputs`, `read_complex`,
     # `read_old_data`, que ja sao reais) viram posticos que REGISTRAM a
     # chamada -- assim os dois lacos principais, o despacho por
     # `water_flag` e o STEP 6 ficam observaveis sem depender da fisica.
@@ -4059,11 +4049,11 @@ def demo():
         _ajustes["iend"] = iend_apos
         cont = {"rc3": 0, "rc4": 0}
 
-        def _fm(state_, nprint_, sprint_, frozen_, nstr_flag_, sdensi_,
+        def _fm(state_, fm_, nprint_, sprint_, frozen_, nstr_flag_, sdensi_,
                 surfdepth_, code2_, code3_, code4_, code5_, first_loop_,
                 phie_, pdens_, oldsd_, oldhi_):
             inspect.signature(_real["fasst_main"]).bind(
-                state_, nprint_, sprint_, frozen_, nstr_flag_, sdensi_,
+                state_, fm_, nprint_, sprint_, frozen_, nstr_flag_, sdensi_,
                 surfdepth_, code2_, code3_, code4_, code5_, first_loop_,
                 phie_, pdens_, oldsd_, oldhi_)
             _registra("fasst_main", state_, extra=first_loop_)
@@ -4312,7 +4302,7 @@ def demo():
     # os TRES numeros da mensagem, nao so o texto: `tempcount` (o
     # registro corrente), `num_frq` (o total) e `freq_id`. Sem isto uma
     # troca de `tempcount` por `num_frq` na lista de argumentos passa.
-    assert (" Running case%12d of%12d freq_id = %12d"
+    assert ("  Running case%12d  of%12d  freq_id = %12d"
             % (1, loc["num_frq"], st.freq_id)) in saida
     assert loc["num_frq"] == 1
     # `iend = iendi` e refeito a cada registro (1288)
@@ -4368,7 +4358,7 @@ def demo():
     # dois na lista de argumentos da 1300 fica visivel. Com um registro so
     # as duas versoes imprimem a mesma linha.
     assert loc["num_frq"] == 1
-    assert (" Running case%12d of%12d freq_id = %12d"
+    assert ("  Running case%12d  of%12d  freq_id = %12d"
             % (2, 1, st.freq_id)) in saida
     # `freq_id` do postico aparece na mensagem de cada registro
     assert st.freq_id == 100 + 1 + 2

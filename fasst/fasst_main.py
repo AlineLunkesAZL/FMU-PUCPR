@@ -1,5 +1,5 @@
 """
-fasst_main.py -- traducao de fasst_main.F90 (PARCIAL: STEPS 3a, 4 e 5)
+fasst_main.py -- traducao de fasst_main.F90
 
 Fonte Fortran: fasst_main.F90 (586 linhas). Uma unica sub-rotina,
 `fasst_main`, chamada pelo driver uma vez por passo de tempo `iw` no
@@ -11,9 +11,9 @@ solo, neve e gelo, organizada pelos marcadores STEP do proprio original:
   STEP 2   (200-216)  temperatura/umidade do dossel (`canopy_met`)
   STEP 3   (218-271)  neve nova, `new_profile` (perfis de temperatura e
                       umidade do solo), emissividades
-  STEP 3a  (274-281)  fluxos solar e IR emitidos pela superficie  <-- aqui
-  STEP 4   (284-287)  resistencia do solo (`soil_strength`)       <-- aqui
-  STEP 5   (290-348)  modelo de neve e gelo de superficie         <-- aqui
+  STEP 3a  (274-281)  fluxos solar e IR emitidos pela superficie
+  STEP 4   (284-287)  resistencia do solo (`soil_strength`)
+  STEP 5   (290-348)  modelo de neve e gelo de superficie
   STEP 6   (351-581)  umidade/gelo medios de superficie, saida nodal
                       (unidade 3), profundidade de congelamento/degelo,
                       arquivo de reinicio (`read_old_data`, modo 2)
@@ -30,21 +30,24 @@ Assinatura original:
 
 Estado desta transcricao
 --------------------------
-PARCIAL. Transcritos os STEPS 3a, 4 e 5 (linhas 274-348); faltam os
-STEPS 1, 2, 3 e 6 e o corpo de `fasst_main` que os encadeia. Ate la o
-driver continua chamando o stub `fasst_driver.fasst_main` (que levanta
-`NotImplementedError`), e o caminho de terra ainda para nele.
+PARCIAL, e ligada no driver: `fasst_driver.main` chama `fasst_main` a
+cada `iw` do caminho de terra. Transcritos os STEPS 3a, 4, 5 e 6 e o corpo
+que encadeia os sete STEPS. Os STEPS 1, 2 e 3 (linhas 148-271) ficam com
+outro integrante da equipe: `step1`, `step2` e `step3` sao stubs que
+levantam `NotImplementedError`, e o caminho de terra para no primeiro
+deles.
 
 Arquitetura
 -------------
-Uma funcao por STEP: `step3a`, `step4`, `step5`. Quando os outros STEPS
-chegarem, o corpo de `fasst_main` so as chama em sequencia. Isto se
-afasta da regra do driver ("um `program`, UM escopo", fasst_driver.py,
-Arquitetura), e pode, porque a fronteira foi conferida: nenhuma local
-atribuida em 274-348 (`dates`, `xtemp`) e lida em 351-586, e `d1i`/`d2i`
-sao reatribuidas na 353 antes de qualquer leitura. As unicas locais que
-ENTRAM vindas de fora sao `fsup`/`firup`, saidas de `new_profile` no
-STEP 3 (`NewProfileResult.fsup/.firup`), e viram parametros de `step3a`.
+Uma funcao por STEP (`step1`, `step2`, `step3`, `step3a`, `step4`,
+`step5`, `step6`); o corpo de `fasst_main` so as chama em sequencia. Isto
+se afasta da regra do driver ("um `program`, UM escopo", fasst_driver.py,
+Arquitetura), e pode, porque as fronteiras foram conferidas: `d1i`/`d2i`
+sao reatribuidas na 353 antes de qualquer leitura; `simelt` so vive no
+STEP 3; `num2`, `dwi`, `sfdp`, `nsstate`, `j`, `k`, `wstart` e `timeo` so
+no STEP 6, e todas comecam do mesmo valor que a zeragem do topo (115-124)
+lhes da. As unicas locais que atravessam uma fronteira sao `fsup`/`firup`
+(STEP 3 -> 3a), que viram retorno de `step3` e parametro de `step3a`.
 
 Os `intent(inout)` que cada STEP toca voltam numa tupla, como no resto do
 repo: `phie, oldsd, oldhi, code2, code4 = step5(...)`. Campos de
@@ -52,15 +55,15 @@ repo: `phie, oldsd, oldhi, code2, code4 = step5(...)`. Campos de
 `state`.
 
 `FasstMainState` reune os `save` de `fasst_main` (`first_snow`,
-`first_time`, linha 118) e o `SnowState` de module_snow. Esse `snow`
-TEM de ser o mesmo objeto de `OpenWaterState.snow`: no Fortran os `save`
-de `module_snow` pertencem ao modulo, nao a quem chama, e sao os mesmos
-para `open_water` e `fasst_main` (pendencia registrada em open_water.py).
-Ja `first_snow` NAO e compartilhado: `open_water` tem o seu proprio
-`save`. Os objetos de canopy/lowveg/albedo entram aqui quando os STEPS 1
-e 2 forem transcritos.
+`first_time`, linha 118) e os das rotinas que `fasst_main` e
+`open_water` chamam (`snow`, `canopy`, `alb`, `lowveg`).
+Esses quatro TEM de ser os mesmos objetos de `OpenWaterState`: no Fortran
+os `save` pertencem as rotinas chamadas, nao a quem chama. O driver cria
+um `FasstMainState` so, junto do `OpenWaterState`, com os quatro
+compartilhados. Ja `first_snow` NAO e compartilhado: `open_water` tem o
+seu proprio `save`.
 
-Constantes (`EPS`) vem de `fasst.constants`; colunas de `met` sao
+Constantes (`EPS`, `TREF`, `MOVERLAP`) vem de `fasst.constants`; colunas de `met` sao
 `MetCol.*`. Indexacao 1-based identica ao Fortran (posicao 0 sem uso).
 
 Dependencias externas (todas reais)
@@ -77,6 +80,7 @@ Dependencias externas (todas reais)
                       no molde de `open_water._snow_model`.
   icethick(state, hinit) -> hfinal     fasst.icethick; `call icethick(
                       oldhi,hi)` vira `state.hi = icethick(state, oldhi)`.
+  read_old_data (modo 2), dense.
 
 Pontos de atencao (comportamento do original preservado)
 ---------------------------------------------------------
@@ -110,31 +114,67 @@ Pontos de atencao (comportamento do original preservado)
    neve e a do `format 91` de `module_snow`, escrita por `snow.py`.
 9. O bloco de gelo de superficie (342) testa so `ip_pt` (2 = chuva, 4 =
    chuva congelante), nunca `ip_pt2`.
+10. STEP 6, media de superficie (366-370): o terceiro ramo do `do while`
+   testa `aint((elev-nzi(j))*1d5)*1d-5` -- TRUNCA, onde os outros dois e a
+   guarda do laco arredondam com `anint`. E quando nenhum dos tres ramos
+   pega, `num2` fica com o valor da volta anterior. Os dois preservados.
+11. STEP 6, congelamento/degelo: o `do while` interno de cada ramo compara
+   `ice(j)` com `pfrozen` SEM o fator `dwi` (gelo -> agua) que o teste
+   de fora usa. (No ramo nao congelado, os dois testes leem
+   `sstate(iw-1)`, nao o recem-escrito: f -> t -> u, um passo por vez --
+   e o pretendido, nao defeito.)
+12. `timeo` e `timeo(2,4)` aqui (122) e `timeo(moverlap,4)` em
+   read_old_data. So o modo 3 escreve nele; no modo 2, o unico que
+   `fasst_main` usa (580), a declaracao menor e inofensiva.
+13. A mensagem `' Start of run'` (139/143) sai pelo list-directed do
+   gfortran: branco de inicio de registro, `I12` e um branco antes de
+   texto que segue numero -- `"  Start of run         100 of ..."`,
+   conferido no TDM-GCC.
 """
 
 import math
 from dataclasses import dataclass, field
 
-from .constants import EPS
+from .albedo_emis import AlbedoEmisState
+from .constants import EPS, MOVERLAP, TREF
+from .functions import Phase, dense
 from .icethick import icethick
 from .indices import MetCol
+from .module_canopy import CanopySavedState
+from .module_lowveg import LowVegState
+from .read_old_data import read_old_data
 from .snow import SnowState, snow_model
 from .soil_strength import soil_strength
 from .state import FasstState
+from .write_outputs import _fmt_e, _fmt_f, _fmt_i
 
-__all__ = ["FasstMainState", "step3a", "step4", "step5"]
+__all__ = ["FasstMainState", "fasst_main", "step3a", "step4", "step5"]
 
 
 @dataclass
 class FasstMainState:
-    """Variaveis `save` de `fasst_main` (linha 118) e o `save` de module_snow.
+    """Variaveis `save` de `fasst_main` (linha 118) e os `save` das rotinas
+    que ela chama.
 
-    `snow` deve ser o MESMO objeto de `OpenWaterState.snow` (ver docstring).
+    `canopy`, `alb`, `lowveg` e `snow` tem de ser os MESMOS objetos de
+    `OpenWaterState` (ver docstring): no Fortran sao `save` das rotinas
+    chamadas, um so por programa.
     """
 
     first_snow: int = 0
     first_time: int = 0
     snow: SnowState = field(default_factory=SnowState)
+    canopy: CanopySavedState = field(default_factory=CanopySavedState)
+    alb: AlbedoEmisState = field(default_factory=AlbedoEmisState)
+    lowveg: LowVegState = field(default_factory=LowVegState)
+
+
+def _anint(x, p=0):
+    """Fortran ``ANINT(x*10**p)*10**-p`` -- arredonda para longe de zero."""
+    if not math.isfinite(x):
+        return x
+    xs = x * (10.0**p)
+    return math.copysign(math.floor(abs(xs) + 0.5), xs) * (10.0**-p)
 
 
 def _aint(x, p=0):
@@ -251,6 +291,282 @@ def step5(state: FasstState, fm: FasstMainState, sprint, sdensi, phie, oldsd,
     met[iw, MetCol.HI] = state.hi
 
     return phie, oldsd, oldhi, code2, code4
+
+
+def _dwi(state, k):
+    """`dense(stt(k),0d0,d2i)/dense(stt(k),0d0,d1i)` -- gelo / agua."""
+    return dense(state.stt[k], 0.0, Phase.ICE) / dense(state.stt[k], 0.0, Phase.WATER)
+
+
+def _q5(x):
+    return _anint(x, 5)
+
+
+def step1(state: FasstState):
+    """STEP 1 (linhas 148-198): met do passo em `dmet1(iw,·)` e propriedades
+    da vegetacao baixa. A transcrever (outro integrante da equipe)."""
+    raise NotImplementedError("fasst_main STEP 1 ainda nao foi traduzido")
+
+
+def step2(state: FasstState, fm: FasstMainState, oldsd, code2):
+    """STEP 2 (linhas 200-216): temperatura/umidade do dossel. Devolve `code2`.
+    A transcrever (outro integrante da equipe)."""
+    raise NotImplementedError("fasst_main STEP 2 ainda nao foi traduzido")
+
+
+def step3(state: FasstState, fm: FasstMainState, code3, code5, pdens, oldsd, phie):
+    """STEP 3 (linhas 218-271): neve nova e `new_profile`.
+
+    Devolve `(code3, code5, pdens, phie, fsup, firup)`. A transcrever (outro
+    integrante da equipe).
+    """
+    raise NotImplementedError("fasst_main STEP 3 ainda nao foi traduzido")
+
+
+def _surface_averages(state, surfdepth):
+    """STEP 6 (linhas 351-440): umidade/gelo medios da camada de superficie."""
+    iw = state.iw
+    nn = state.nnodes
+    elev, nz, nzi, ns = state.elev, state.nz, state.nzi, state.nsoilp
+    sm, ice = state.soil_moist, state.ice
+    surfm = surfi = surfmp = surfip = surfdd = denom = 0.0
+    num2 = 0.0
+    sfdp = surfdepth + 1e-4
+
+    if state.water_flag == 0:
+        j = nn
+        while j >= 2 and _q5(elev - nzi[j]) <= sfdp:
+            if j == nn:
+                num2 = 5e-1 * (elev - nzi[j - 1])
+            elif _q5(elev - nzi[j]) <= sfdp and _q5(elev - nzi[j - 1]) <= sfdp:
+                num2 = 5e-1 * (nz[j + 1] - nzi[j - 1])
+            elif _aint(elev - nzi[j], 5) <= sfdp and _q5(elev - nzi[j - 1]) > sfdp:   # sic: aint
+                if _q5(elev - nzi[j]) - sfdp <= EPS:
+                    num2 = (elev - nzi[j]) - denom
+                else:
+                    num2 = 5e-1 * ((elev - nzi[j]) - surfdepth)
+            # sem else: `num2` fica com o valor da volta anterior
+            denom = denom + num2
+            t1 = ns[j, 1]
+            surfdd = surfdd + ns[j, 1] * num2
+
+            surfm = surfm + sm[j] * num2
+            if state.ntype[j] != 27 and abs(t1) > EPS:
+                surfmp = surfmp + (sm[j] / t1) * num2
+            else:
+                surfmp = surfm
+
+            if ice[j] > EPS:
+                dwi = _dwi(state, j)
+                surfi = surfi + ice[j] * num2 * dwi
+                if state.ntype[j] != 27 and abs(t1) > EPS:
+                    surfip = surfip + (ice[j] / t1) * num2 * dwi
+                else:
+                    surfip = surfi
+
+            j = j - 1
+    else:
+        denom = elev - nz[nn - 1]
+        surfdd = ns[nn, 1] * denom
+
+        surfm = 5e-1 * (sm[nn] + sm[nn - 1]) * denom
+        if state.ntype[nn] != 27:
+            surfmp = 5e-1 * (sm[nn] + sm[nn - 1]) * denom / ns[nn, 1]
+        else:
+            surfmp = surfm
+
+        if ice[nn] > EPS or ice[nn - 1] > EPS:
+            dwi = _dwi(state, nn)
+            dwi1 = _dwi(state, nn - 1)
+            surfi = 5e-1 * (ice[nn] * dwi + ice[nn - 1] * dwi1) * denom
+            if state.ntype[nn] != 27:
+                surfip = 5e-1 * (ice[nn] * dwi + ice[nn - 1] * dwi1) * denom / ns[nn, 1]
+            else:
+                surfip = surfi
+
+    if denom > EPS:
+        state.surfmoist[iw] = surfm / denom
+        state.surfice[iw] = surfi / denom
+        state.surfmoistp[iw] = surfmp / denom
+        state.surficep[iw] = surfip / denom
+        state.surfd[iw] = (surfdd / denom) * 1e3                        # kg/m^3
+    else:
+        state.surfmoist[iw] = sm[nn]
+        state.surfice[iw] = ice[nn]
+        state.surfmoistp[iw] = sm[nn] / ns[nn, 2]
+        state.surficep[iw] = ice[nn] / ns[nn, 2]
+        state.surfd[iw] = ns[nn, 1] * 1e3                               # kg/m^3
+
+
+def _pfrozen(state, frozen, k, dwi):
+    return float(frozen) * 1e-2 * (state.ice[k] * dwi + state.soil_moist[k])
+
+
+def _write_nodes(state, frozen):
+    """STEP 6 (linhas 443-465): saida nodal na unidade 3, `format 1001`
+    `(5(i5),3x,a2,1x,2(f9.3),4(e12.4),3x,a1)`."""
+    iw = state.iw
+    nn = state.nnodes
+    met = state.met
+    for j in range(1, nn + 1):
+        k = nn - j + 1
+        dwi = _dwi(state, k)
+        pfrozen = _pfrozen(state, frozen, k, dwi)
+        if state.ice[k] * dwi >= pfrozen and state.ice[k] > EPS:
+            nsstate = "f"
+        else:
+            nsstate = "u"
+            if state.ntype[k] > 19 and state.stt[k] <= TREF:
+                nsstate = "f"
+        state.unit3.write(
+            _fmt_i(int(met[iw, MetCol.YEAR]), 5) + _fmt_i(int(met[iw, MetCol.DOY]), 5)
+            + _fmt_i(int(met[iw, MetCol.HR]), 5) + _fmt_i(int(met[iw, MetCol.MIN]), 5)
+            + _fmt_i(j, 5) + "   " + str(state.node_type[k]).ljust(2)[:2] + " "
+            + _fmt_f(abs(state.elev - state.nz[k]), 9, 3) + _fmt_f(state.stt[k], 9, 3)
+            + _fmt_e(state.soil_moist[k], 12, 4) + _fmt_e(state.ice[k], 12, 4)
+            + _fmt_e(state.soil_moist[k] + state.ice[k], 12, 4) + _fmt_e(state.wvc[k], 12, 4)
+            + "   " + nsstate + "\n")
+
+
+def _freeze_thaw(state, frozen):
+    """STEP 6 (linhas 467-562): profundidade de congelamento/degelo e estado."""
+    iw = state.iw
+    nn = state.nnodes
+    elev, nz, ice = state.elev, state.nz, state.ice
+    state.sstate[iw] = "u"
+    state.frthick[iw] = elev - nz[nn]
+    state.twthick[iw] = elev - nz[nn]
+    dwi = _dwi(state, nn)
+    pfrozen = _pfrozen(state, frozen, nn, dwi)
+
+    fts = 0
+    if ice[nn] * dwi >= pfrozen and ice[nn] > EPS:
+        state.sstate[iw] = "f"
+        for k in range(nn - 1, 0, -1):
+            dwi = _dwi(state, k)
+            pfrozen = _pfrozen(state, frozen, k, dwi)
+
+            if (ice[k] * dwi >= pfrozen and ice[k] > EPS) and fts == 0:
+                if k >= 2:
+                    state.frthick[iw] = (nz[k] + nz[k - 1]) * 5e-1
+                    state.frthick[iw] = elev - state.frthick[iw]
+                elif k == 1:
+                    state.twthick[iw] = 0.0
+                    state.frthick[iw] = elev - nz[k]
+            else:
+                if k == nn - 1:
+                    state.frthick[iw] = elev - (nz[k] + nz[k + 1]) * 5e-1
+                fts = 1
+                j = k
+                while j >= 2 and (ice[j] < pfrozen or abs(ice[j]) <= EPS):   # sic: sem dwi
+                    state.twthick[iw] = (nz[j] + nz[j - 1]) * 5e-1
+                    state.twthick[iw] = elev - state.twthick[iw]
+                    j = j - 1
+                    dwi = _dwi(state, j)
+                    pfrozen = _pfrozen(state, frozen, j, dwi)
+
+                if j == 1 and (ice[j] * dwi < pfrozen or ice[j] <= EPS):
+                    state.twthick[iw] = elev - nz[1]
+                break
+    else:
+        if iw >= 2:
+            if state.sstate[iw - 1] == "f":
+                state.sstate[iw] = "t"
+            if state.sstate[iw - 1] == "t":           # o anterior, nao o recem-escrito: f -> t -> u
+                state.sstate[iw] = "u"
+
+        state.twthick[iw] = (nz[nn] + nz[nn - 1]) * 5e-1
+        state.twthick[iw] = elev - state.twthick[iw]
+
+        for k in range(nn - 1, 0, -1):
+            dwi = _dwi(state, k)
+            pfrozen = _pfrozen(state, frozen, k, dwi)
+
+            if (ice[k] * dwi < pfrozen or abs(ice[k]) <= EPS) and fts == 0:
+                if k >= 2:
+                    state.twthick[iw] = (nz[k] + nz[k - 1]) * 5e-1
+                    state.twthick[iw] = elev - state.twthick[iw]
+                elif k <= 1:
+                    state.frthick[iw] = 0.0
+                    state.twthick[iw] = elev - nz[k]
+            else:
+                if k == nn - 1:
+                    state.twthick[iw] = elev - (nz[k] + nz[k + 1]) * 5e-1
+                fts = 1
+                j = k
+                while j >= 2 and (ice[j] >= pfrozen and ice[j] > EPS):   # sic: sem dwi
+                    state.frthick[iw] = (nz[j] + nz[j - 1]) * 5e-1
+                    state.frthick[iw] = elev - state.frthick[iw]
+                    j = j - 1
+                    dwi = _dwi(state, j)
+                    pfrozen = _pfrozen(state, frozen, j, dwi)
+                if j == 1 and ice[j] * dwi >= pfrozen:
+                    state.frthick[iw] = elev - nz[1]
+                break
+    if str(state.node_type[nn]).strip() == "WA":
+        state.met[iw, MetCol.HI] = state.frthick[iw]
+
+
+def step6(state: FasstState, nprint, frozen, sdensi, surfdepth, phie):
+    """STEP 6 (linhas 351-581): medias de superficie, saida nodal,
+    congelamento/degelo e arquivo de reinicio. Devolve `phie`."""
+    iw = state.iw
+    _surface_averages(state, surfdepth)
+    if nprint == 1:
+        _write_nodes(state, frozen)
+    _freeze_thaw(state, frozen)
+
+    state.tot_thick[iw] = _anint(state.elev - state.nz[1], 10)
+
+    state.error_type = 0
+
+    wstart = max(state.iend - (MOVERLAP - 1), state.istart)
+    if iw >= wstart:
+        # `timeo(2,4)` aqui contra `timeo(moverlap,4)` em read_old_data: so o
+        # modo 3 escreve nele, entao a declaracao menor e inofensiva no modo 2.
+        timeo = [[0.0] * 5 for _ in range(MOVERLAP + 1)]
+        _, phie = read_old_data(state, 2, iw, wstart, sdensi, phie, timeo)
+    return phie
+
+
+def _print_start(iw, iend):
+    # write(*,*)' Start of run',iw,'of',iend,'runs' -- list-directed do
+    # gfortran: branco no inicio do registro, I12, e um branco antes de
+    # texto que segue um numero (conferido no TDM-GCC).
+    print("  Start of run%12d of%12d runs" % (iw, iend))
+
+
+def fasst_main(state: FasstState, fm: FasstMainState, nprint, sprint, frozen,
+               nstr_flag, sdensi, surfdepth, code2, code3, code4, code5,
+               first_loop, phie, pdens, oldsd, oldhi):
+    """`subroutine fasst_main` (fasst_main.F90, 586 linhas), um passo `iw`.
+
+    `fm` leva os `save` (ver `FasstMainState`). Devolve os `intent(inout)`:
+    `(code2, code3, code4, code5, first_loop, phie, pdens, oldsd, oldhi)`.
+    """
+    iw = state.iw
+    if first_loop == 0:
+        fm.first_time = 0                                   # first time through new profile routines
+        fm.first_snow = 0                                   # first time through snow routines
+        state.vsmelt = 0.0                                  # snow melt (m)
+        state.vimelt = 0.0                                  # ice melt (m)
+        first_loop = 1
+
+    if iw - _anint(iw * 1e-2) * 1e2 == 0 and state.single_multi_flag == 0:
+        _print_start(iw, state.iend)
+    elif state.iend > 50 and (iw - _anint(iw * 2e-2) * 5e1 == 0
+                              and state.single_multi_flag == 1):
+        _print_start(iw, state.iend)
+
+    step1(state)
+    code2 = step2(state, fm, oldsd, code2)
+    code3, code5, pdens, phie, fsup, firup = step3(state, fm, code3, code5, pdens, oldsd, phie)
+    step3a(state, fsup, firup)
+    step4(state, nstr_flag)
+    phie, oldsd, oldhi, code2, code4 = step5(state, fm, sprint, sdensi, phie, oldsd,
+                                             oldhi, code2, code4)
+    phie = step6(state, nprint, frozen, sdensi, surfdepth, phie)
+    return code2, code3, code4, code5, first_loop, phie, pdens, oldsd, oldhi
 
 
 def demo():
@@ -400,6 +716,24 @@ def demo():
         st.timstep = 1.0
         r = step5(st, fm, 0, 200.0, 0.0, 0.0, 0.07, 0, 0)
         assert st.hi == 0.0 and r[2] == 0.07
+
+    # ---- STEP 6: format 1001 da unidade 3 ----
+    # gabarito: linha que o FASST compilado escreveu no caso `grama` de
+    # cmp_fortran_agua.py (saida.grd), refeita aqui com os mesmos valores
+    st = novo()
+    st.nnodes = 2
+    st.met[2, MetCol.YEAR], st.met[2, MetCol.DOY], st.met[2, MetCol.HR] = 2010.0, 100.0, 11.0
+    st.elev = 1.0
+    st.nz[1], st.nz[2] = 0.985, 1.0
+    st.node_type[1], st.node_type[2] = "SM", "SM"
+    st.stt[1], st.stt[2] = 38.696, 38.0
+    st.soil_moist[1], st.ice[1], st.wvc[1] = 0.0, 0.1337, 0.0
+    st.ntype[1] = st.ntype[2] = 7
+    st.unit3 = io.StringIO()
+    _write_nodes(st, 100)
+    assert st.unit3.getvalue().splitlines()[1] == (
+        " 2010  100   11    0    2   SM     0.015   38.696  0.0000E+00  0.1337E+00"
+        "  0.1337E+00  0.0000E+00   f")
 
     print("demo OK")
 

@@ -39,11 +39,10 @@ Instancie um `OpenWaterState` por execucao e reutilize-o em todas as
 chamadas -- o driver cria UM antes do STEP 4, nunca um por ponto, porque
 um `save` do Fortran dura o programa inteiro.
 
-PENDENTE (quando `fasst_main` for transcrita): no Fortran os `save` de
-`canopy_met`, `albedo_emis`, `lowveg_met` e `module_snow` pertencem a
-essas rotinas, e sao os MESMOS para `open_water` e para `fasst_main`.
-Hoje so `open_water` os usa; quando `fasst_main` existir, as duas tem de
-receber os mesmos objetos.
+No Fortran os `save` de `canopy_met`, `albedo_emis`, `lowveg_met` e
+`module_snow` pertencem a essas rotinas, e sao os MESMOS para
+`open_water` e para `fasst_main`: o driver cria o `FasstMainState` com
+`canopy`/`alb`/`lowveg`/`snow` apontando para os deste objeto.
 
 Constantes (`EPS`, `PI`, `SPFLAG`, `TREF`, `SIGMA`, `IALBEDO`, `IEMIS`,
 `IDENS`, `ITHCOND`, `STHCOND`, `LHFUS`, `MOVERLAP`, `NCLAYERS`) vem de
