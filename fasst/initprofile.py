@@ -84,6 +84,8 @@ Pontos de atencao herdados do Fortran original
 
 import math
 
+import numpy as np
+
 from .constants import (
     EPS, EXTRAN, GRAV, HT_MIN, HT_MINM, IALBEDO, IEMIS, MAXL, MAXN, MAXP, PI, RD, RV,
     SEMIS, SNALBEDO, SOALBEDO, SPFLAG, TREF,
@@ -1139,7 +1141,11 @@ def sort(n, arr):
             i = 0
         arr[i + 1] = a
 
-    b = _new_array(n)
+    # `b(maxn)`, zerado INTEIRO (1095-1098): os chamadores atribuem o
+    # resultado a `state.nz`, que tem de continuar um array de MAXN + 1
+    # posicoes -- uma lista de n + 1 quebrava o `zero_parameters` do ponto
+    # seguinte no modo multiponto.
+    b = np.zeros(MAXN + 1, dtype=np.float64)
     ncount = 1
     b[ncount] = arr[1]
     for j in range(2, n + 1):
