@@ -450,7 +450,8 @@ Pendencias
   a segunda metade so se cumpre no caminho de agua: o de terra para nos
   stubs dos STEPS 1-3 de `fasst_main`. E o `demo()` le por eles centenas de asserts sobre locais do
   `program` (ponto 5, `_step6`, ...) que nenhum arquivo de saida mostra;
-  tira-los e reescrever esse demo. Decisao em aberto.
+  tira-los e reescrever esse demo. Mantidos por decisao do usuario
+  (22/10/2026).
 """
 
 import math
