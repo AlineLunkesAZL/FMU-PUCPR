@@ -427,18 +427,6 @@ Pendencias
   Os STEPS 3a, 4 e 5 ja estao em `fasst/fasst_main.py` (`step3a`, `step4`,
   `step5`, mais `FasstMainState`, cujo `snow` deve ser o `ow.snow`); faltam
   os STEPS 1, 2, 3 e 6 e o corpo que os encadeia.
-* `_ListaLivre` (read_complex.py) lembra o fim de arquivo por unidade e
-  `_Unit.rewind` nao limpa isso. Sem efeito hoje: o unico EOF que ela ve e
-  o da ultima volta do laco do STEP 4, e depois dele ninguem rebobina a
-  unidade 5.
-* Convencao de unidade de arquivo dividida: `initsurface` assume
-  `state.unit*`, `us_soil_tools.get_user_soil_params` recebe `unit90` por
-  parametro. O driver passa a preencher `state.unit*`; unificar as duas
-  convencoes fica para depois.
-* `_read_table_lines` (`initsurface.py:181`) e `_read_veg_table_row`
-  (`module_canopy.py:2039`) leem os mesmos arquivos (units 31/32/33) com
-  contratos incompativeis. O driver abre as unidades; reconciliar os dois
-  leitores e trabalho de `fasst_main`.
 * `makemtagroundout` / `makemtafasstout` (1428-1430) estao comentadas no
   proprio Fortran. Nao transcrever.
 * VALOR FINAL DE VARIAVEL DE LACO -- conferir em cada dia que falta. Um
@@ -482,7 +470,7 @@ from .zerovars import zero_mxl_params, zero_parameters
 from .initsurface import initsurface
 from .initwater import initwater
 from .open_water import OpenWaterState, open_water
-from .read_complex import read_complex
+from .read_complex import _APOS_EOF, read_complex
 from .read_old_data import read_old_data
 from .write_outputs import write_outputs
 
@@ -728,7 +716,7 @@ class _Unit:
 
     def rewind(self):
         """`rewind(u)` -- volta ao primeiro registro."""
-        self.f.seek(0)
+        self.seek(0)
 
     # Passagens diretas, para os modulos que recebem a unidade e leem/escrevem
     # por conta propria: `us_soil_tools.get_user_soil_params` chama
@@ -744,7 +732,12 @@ class _Unit:
         antes de `_Unit` existir e tratam `state.unitN` como objeto de
         arquivo cru. Delegar e o menor diff que atende os dois contratos --
         o do driver, orientado a REGISTRO, e o deles.
+
+        Como no gfortran, rebobinar limpa a condicao de fim de arquivo que
+        `read_complex._ListaLivre` lembra por unidade (o `read` seguinte
+        nao da mais `io = 5001`).
         """
+        _APOS_EOF.discard(self)
         return self.f.seek(pos)
 
     def write(self, s):
@@ -4547,6 +4540,25 @@ def demo():
     assert st.unit12 is not None and st.unit12.f.closed
     assert not os.path.exists(os.path.join(d, "velho_ro_soil.dat"))
     assert not os.path.exists(os.path.join(d, "velho_ro_time.dat"))
+
+    # `rewind` limpa o fim de arquivo lembrado por `_ListaLivre`: sem isso,
+    # o `read` depois do rewind daria io = 5001 em vez de ler o registro 1.
+    from .read_complex import _ListaLivre
+    p = os.path.join(d, "eof.inp")
+    with open(p, "w") as f:
+        f.write("7\n")
+    u = _Unit(p)
+    r = _ListaLivre(u)
+    assert r.inteiro(0) == 7 and r.io == 0
+    r.fim()
+    r = _ListaLivre(u)
+    r.inteiro(0)
+    assert r.io == -1 and u in _APOS_EOF
+    assert _ListaLivre(u).io == 5001
+    u.rewind()
+    r = _ListaLivre(u)
+    assert r.inteiro(0) == 7 and r.io == 0
+    u.f.close()
 
     print("demo OK")
 

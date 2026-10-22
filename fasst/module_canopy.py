@@ -55,8 +55,8 @@ efeito colateral, lidos normalmente mais adiante (por exemplo, em
 `canopy_prop`). `sp_humid` devolve um `MoistAirState` (23 campos
 nomeados); os call sites em `canopy_moist` leem 4 desses campos por nome
 (mixr, dqdt, vpress, wetbulb) em cada chamada. A leitura das tabelas de
-vegetação (units 31/32/33) é um stub (`_read_veg_table_row`): arquivo de
-abertura ainda não identificado/traduzido.
+vegetação (units 31/32/33) é feita por `_read_veg_table_row`, sobre os
+arquivos que o driver abre em `state.unit31/32/33`.
 
 As 7 variáveis `save::` de `canopy_met` (x, epsc, rho, clump, tau, alp,
 psi), que precisam persistir entre chamadas sucessivas, formam o
@@ -116,6 +116,7 @@ from .indices import MetCol
 from .sp_humid import sp_humid
 from .state import FasstState
 from .albedo_emis import albedo_emis, AlbedoEmisState
+from .module_lowveg import _list_items
 
 __all__ = [
     "CanopySavedState", "canopy_met", "canopy_prop", "canopy_moist",
@@ -2034,25 +2035,31 @@ _CINFO[1, 5], _CINFO[2, 5], _CINFO[3, 5], _CINFO[4, 5], _CINFO[5, 5], _CINFO[6, 
     30.0, 0.45, 0.466666667, 0.083333333, 0.4, 0.5, 0.1)             # mista               (vegh_type 18, vind 5)
 
 
-def _read_veg_table_row(file_unit, target_vid):
+def _read_veg_table_row(state, file_unit, target_vid):
     """
-    TODO: leitura de arquivo externo — no Fortran, `read(file_unit,*,iostat=io)
-    vid,srmax,srmin,cmax,cmin,rl,laimax,laimin,ddmax,sai,ar,br,emissmin,
-    emissmax,folamin,folamax,heigmin,heigmax`, repetida linha a linha até
-    encontrar `vid == target_vid` ou chegar ao fim do arquivo.
+    `read(file_unit,*,iostat=io) vid,srmax,...,heigmax` linha a linha, depois
+    dos cabecalhos, ate `vid == target_vid` ou fim de arquivo
+    (module_canopy.F90:2809-2842 e 2855-2895), e entao `rewind(file_unit)`.
 
-    As unidades 31 (tabela padrão), 32 (Modis-NOAH) e 33 (UMD) são abertas
-    fora de module_canopy.F90 (provavelmente em fasst_main.F90 ou
-    fasst_driver.F90, ainda não traduzidos). Quando essa parte for
-    implementada, esta função deve devolver uma tupla de 17 valores
-    (srmax,srmin,cmax,cmin,rl,laimax,laimin,ddmax,sai,ar,br,emissmin,
-    emissmax,folamin,folamax,heigmin,heigmax) — ou None se target_vid não
-    for encontrado até o fim do arquivo (equivalente a io == -1 no Fortran).
+    As tabelas (31 padrao, 32 Modis-NOAH, 33 UMD) sao abertas pelo driver em
+    `state.unit31/32/33`; os cabecalhos tem 36, 45 e 31 linhas, como no
+    Fortran. Devolve os 17 valores (srmax,...,heigmax), ou None se
+    `target_vid` nao aparece (io == -1 no Fortran). Virgula e/ou branco
+    separam os itens e o expoente e `d`, como em `veg_propl`
+    (`module_lowveg._list_items`).
     """
-    raise NotImplementedError(
-        "leitura das tabelas de propriedades de vegetação (units 31/32/33) "
-        "ainda não foi traduzida — arquivos abertos fora de module_canopy.F90"
-    )
+    u = getattr(state, f"unit{file_unit}")
+    u.seek(0)
+    for _ in range({31: 36, 32: 45, 33: 31}[file_unit]):
+        u.readline()
+    row = None
+    for line in iter(u.readline, ""):
+        parts = _list_items(line)
+        if parts and int(parts[0]) == target_vid:
+            row = tuple(float(x) for x in parts[1:18])
+            break
+    u.seek(0)
+    return row
 
 
 # ---------------------------------------------------------------------------
@@ -2087,7 +2094,7 @@ def veg_proph(state: FasstState, biome_source, new_vt, veg_type):
        dados de teste e o comportamento original ali é essencialmente
        indefinido; aqui simplesmente não populamos `newveg_prp` nesse caso.
 
-    Chama `_read_veg_table_row` (ainda stub — leitura de arquivo externo).
+    Lê as tabelas por `_read_veg_table_row`.
     """
     zdw = 0.0
     zup = 0.0
@@ -2103,7 +2110,7 @@ def veg_proph(state: FasstState, biome_source, new_vt, veg_type):
             state.laif[i] = 0.0
 
     # ---- tabela padrão (unit 31) -------------------------------------------
-    row = _read_veg_table_row(31, veg_type)
+    row = _read_veg_table_row(state, 31, veg_type)
     if row is not None:
         (srmax, srmin, cmax, cmin, rl, laimax, laimin, ddmax, sai, ar, br,
          emissmin, emissmax, folamin, folamax, heigmin, heigmax) = row
@@ -2138,7 +2145,7 @@ def veg_proph(state: FasstState, biome_source, new_vt, veg_type):
 
         if fid is not None:
             newveg_prp = np.zeros((ntypes + 1, 18))
-            row = _read_veg_table_row(fid, new_vt)
+            row = _read_veg_table_row(state, fid, new_vt)
             if row is not None:
                 (srmax, srmin, cmax, cmin, rl, laimax, laimin, ddmax, sai, ar, br,
                  emissmin, emissmax, folamin, folamax, heigmin, heigmax) = row

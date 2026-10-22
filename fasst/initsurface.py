@@ -36,13 +36,11 @@ exatamente como no Fortran (ver "Nao confundir com initwater.py").
 cabecalho do arquivo meteorologico em tempo de execucao.
 
 `veg_propl`/`veg_proph` sao as funcoes reais, importadas de
-`fasst.module_lowveg`/`fasst.module_canopy`. `veg_propl` espera as
-linhas do arquivo de propriedades ja lidas (`file_unit_31_data`),
-enquanto `veg_proph` usa um stub interno de leitura linha a linha
-(`_read_veg_table_row`, em module_canopy.py) -- as duas dependencias de
-leitura de arquivo (units 31/32/33) nao seguem a mesma convencao entre
-si. Aqui, isso fica exposto via um stub local (`_read_table_lines`),
-usado na chamada de `veg_propl` -- ver "Dependencias externas".
+`fasst.module_lowveg`/`fasst.module_canopy`. As duas leem as tabelas
+de propriedades (units 31/32/33) que o driver abre em `state.unit31/32/33`:
+`veg_propl` recebe as linhas ja lidas (`_read_table_lines`, aqui, que
+tambem entrega a tabela de bioma quando `biome_source` e 1000/2000), e
+`veg_proph` le pela propria `_read_veg_table_row` (module_canopy.py).
 
 `read_old_data` e real, importada de `fasst.read_old_data`. `met_date`, `missing_met`, `upr_case` e
 `get_user_soil_params` sao reais, importadas de `fasst.functions`/
@@ -52,10 +50,8 @@ e devolve os 23 valores de saida, atribuidos aqui a `sname[i]`,
 `state.sclass[i]`, `state.soiltype[i]` e `state.isoilp[i][...]`.
 
 `state.unit3`, `state.unit10`, `state.unit55`, `state.unit90`,
-`state.unit31`, `state.unit32`, `state.unit33` sao usados aqui como
-identificadores de arquivo ja abertos -- essa convencao nao esta
-confirmada contra `fasst/state.py`, que nao declara campos de
-arquivo/unidade logica. Ver Pendencias.
+`state.unit31`, `state.unit32`, `state.unit33` sao os arquivos que o
+driver abre no STEP 3 (campos `unit*` de `fasst/state.py`).
 
 Estrutura desta transcricao (parametros)
 ------------------------------------------
@@ -169,18 +165,25 @@ def _anint(x, p=0):
     return ai * (10.0**-p)
 
 
-def _read_table_lines(unit):
-    """
-    TODO: leitura do arquivo de propriedades de vegetacao (units 31/32/33),
-    ja aberto em algum lugar nao identificado (fasst_main.F90?). Deveria
-    devolver a lista de linhas do arquivo (para `veg_propl`) -- ver nota
-    de inconsistencia com `veg_proph`/`_read_veg_table_row`, em
-    "Reconciliação com a arquitetura real" no docstring do módulo.
-    """
-    raise NotImplementedError(
-        f"leitura do arquivo de propriedades de vegetacao (unit {unit}) "
-        "ainda nao foi traduzida"
-    )
+def _read_table_lines(state, unit):
+    """Todas as linhas da tabela de propriedades de vegetacao `unit`
+    (31 padrao, 32 MODIS, 33 UMD), aberta pelo driver em `state.unitN`.
+    `veg_propl` pula os cabecalhos e procura o tipo. Le desde o inicio e
+    rebobina no fim, como o `rewind(31)`/`rewind(fid)` de
+    module_lowveg.F90:684/738; `None` para unidade 0 (biome_source que
+    nao e 1000 nem 2000)."""
+    if unit == 0:
+        return None
+    u = getattr(state, f"unit{unit}")
+    u.seek(0)
+    lines = [s.rstrip("\r\n") for s in iter(u.readline, "")]
+    u.seek(0)
+    return lines
+
+
+def _biome_unit(biome_source):
+    """fid de module_lowveg.F90/module_canopy.F90: 32 MODIS, 33 UMD."""
+    return {1000: 32, 2000: 33}.get(biome_source, 0) if biome_source > 0 else 0
 
 
 def initsurface(state: FasstState, nt0, nm0, nprint, sprint, sname, ttest, mtest,
@@ -258,7 +261,8 @@ def initsurface(state: FasstState, nt0, nm0, nprint, sprint, sname, ttest, mtest
 
         if state.vegl_type != 0:
             veg_propl(state, state.biome_source, state.new_vtl, state.vegl_type,
-                      _read_table_lines(31))
+                      _read_table_lines(state, 31),
+                      _read_table_lines(state, _biome_unit(state.biome_source)))
         if state.vegh_type != 0:
             veg_proph(state, state.biome_source, state.new_vth, state.vegh_type)
 
@@ -347,7 +351,8 @@ def initsurface(state: FasstState, nt0, nm0, nprint, sprint, sname, ttest, mtest
 
         if state.veg_flagl == 1:
             veg_propl(state, state.biome_source, state.new_vtl, state.vegl_type,
-                      _read_table_lines(31))
+                      _read_table_lines(state, 31),
+                      _read_table_lines(state, _biome_unit(state.biome_source)))
         if state.veg_flagh == 1:
             veg_proph(state, state.biome_source, state.new_vth, state.vegh_type)
 
