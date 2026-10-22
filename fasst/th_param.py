@@ -118,14 +118,25 @@ def _fdiv(x, y):
         return float(np.float64(x) / np.float64(y))
 
 
+def _clamp(lo, x, hi):
+    """``dmin1(dmax1(lo,x),hi)`` aninhado, como o gfortran 10.3 -O0 o
+    executa: NaN em `x` PROPAGA. O `min`/`max` do Python descartaria o NaN
+    e devolveria um valor finito. O padrao deixa MIN/MAX com NaN indefinido;
+    isto acompanha o compilador de referencia (doc de 2026-10-01, ponto 7).
+    So vale aninhado -- `dmax1(0d0,nan)` isolado devolve 0, como `max`."""
+    if x != x:
+        return x
+    return min(max(lo, x), hi)
+
+
 def _sturm_conductivity(densgc):
     """Condutividade termica da neve (W/m*K), Sturm et al. (1997), em
     funcao da densidade em g/cm^3, limitada a [limite inferior, 1.0]."""
     if densgc < 1.56e-1:
         k = 2.3e-2 + 2.34e-1 * densgc
-        return min(max(2.3e-2, k), 1.0)
+        return _clamp(2.3e-2, k, 1.0)
     k = 1.38e-1 - 1.01 * densgc + 3.233 * densgc * densgc
-    return min(max(1.38e-1, k), 1.0)
+    return _clamp(1.38e-1, k, 1.0)
 
 
 def th_param(state: FasstState, n, pdens, pdensnew, rhov, rhoda):
@@ -193,7 +204,7 @@ def th_param(state: FasstState, n, pdens, pdensnew, rhov, rhoda):
                 kw = thconds(state.stt[i], Phase.WATER)  # W/m*K, water
                 ka = thconds(state.stt[i], Phase.DRY_AIR)  # W/m*K, air
                 kv = thconds(state.stt[i], Phase.WATER_VAPOR)  # W/m*K, water vapor
-                sr = max(EPS, min(1.0, state.soil_moist[i] / state.nsoilp[i][9]))  # unitless
+                sr = _clamp(EPS, _fdiv(state.soil_moist[i], state.nsoilp[i][9]), 1.0)  # unitless; 0/0 -> NaN
 
                 # thermal conductivity of soil solids (W/m*K)
                 ksq = 1.0  # quartz
@@ -222,7 +233,7 @@ def th_param(state: FasstState, n, pdens, pdensnew, rhov, rhoda):
                             ke = math.exp(7.28e-1 * (1.0 - sr ** (7.28e-1 - 1.165)))
                         else:
                             ke = math.exp(3.7e-1 * (1.0 - sr ** (3.7e-1 - 1.29)))
-                ke = min(max(0.0, ke), 1.0)
+                ke = _clamp(0.0, ke, 1.0)
 
                 if state.ice[i] > EPS:  # frozen
                     ki = thconds(state.stt[i], Phase.ICE)
