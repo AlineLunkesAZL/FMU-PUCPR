@@ -30,12 +30,11 @@ Assinatura original:
 
 Estado desta transcricao
 --------------------------
-PARCIAL, e ligada no driver: `fasst_driver.main` chama `fasst_main` a
-cada `iw` do caminho de terra. Transcritos os STEPS 3a, 4, 5 e 6 e o corpo
-que encadeia os sete STEPS. Os STEPS 1, 2 e 3 (linhas 148-271) ficam com
-outro integrante da equipe: `step1`, `step2` e `step3` sao stubs que
-levantam `NotImplementedError`, e o caminho de terra para no primeiro
-deles.
+COMPLETA, e ligada no driver: `fasst_driver.main` chama `fasst_main` a
+cada `iw` do caminho de terra. Os STEPS 1, 2 e 3 (linhas 148-271) sao a
+traducao do Allan (`fasst_main_allan.py`, fundida aqui); os STEPS 3a, 4, 5
+e 6 e o corpo que encadeia os sete, do Lucas. `new_profile` e a real,
+ligada pelo adaptador `_new_profile`.
 
 Arquitetura
 -------------
@@ -61,13 +60,31 @@ Esses quatro TEM de ser os mesmos objetos de `OpenWaterState`: no Fortran
 os `save` pertencem as rotinas chamadas, nao a quem chama. O driver cria
 um `FasstMainState` so, junto do `OpenWaterState`, com os quatro
 compartilhados. Ja `first_snow` NAO e compartilhado: `open_water` tem o
-seu proprio `save`.
+seu proprio `save`. `profile` (os `save` de `new_profile`) e so daqui:
+`open_water` nao chama `new_profile`.
 
-Constantes (`EPS`, `TREF`, `MOVERLAP`) vem de `fasst.constants`; colunas de `met` sao
-`MetCol.*`. Indexacao 1-based identica ao Fortran (posicao 0 sem uso).
+Constantes (`EPS`, `PI`, `TREF`, `NCLAYERS`, `MOVERLAP`) vem de
+`fasst.constants`; colunas de `met` sao `MetCol.*`. As 13 colunas de
+`dmet1` nao tem enum e sao usadas por numero. Indexacao 1-based identica
+ao Fortran (posicao 0 sem uso).
 
 Dependencias externas (todas reais)
 -------------------------------------
+  low_veg_prop(state, fatemp, c3_hgt)  fasst.module_lowveg (STEP 1).
+  canopy_met(state, canopy, alb, oldsd) fasst.module_canopy (STEP 2).
+  new_profile(state, save, code5, first_time, pdens, oldsd, simelt, phie,
+              fsup, firup, *, <7 dependencias injetadas>) -> NewProfileResult
+                      fasst.new_profile (STEP 3), pelo adaptador
+                      `_new_profile`. `th_param`, `flow_param` e `soil_tmp`
+                      entram diretas; as outras quatro tem assinatura
+                      diferente do contrato e ganham um invólucro:
+                      `albedo_emis` recebe `fm.alb`; `sub_divide` devolve
+                      `dmet` e o invólucro o copia no array de
+                      `new_profile`; `soil_moisture` devolve `runoff` e o
+                      invólucro o copia no lugar; `lowveg_met` recebe
+                      `fm.lowveg` e devolve 7-tupla, que vira
+                      `LowVegMetResult` com o `wetbulba` de entrada
+                      (module_lowveg nao o altera).
   soil_strength(state, nstr_flag) -> (ss_strengtho, ll_strengtho, scbro)
                       fasst.soil_strength; a ordem confere com o dummy de
                       soil_strength.F90 (`nstr_flag,ss_strengtho,
@@ -91,7 +108,8 @@ Pontos de atencao (comportamento do original preservado)
    faz a mesma conversao dupla.
 2. STEP 5 testa o tipo de precipitacao com `aint` (293, 342); o STEP 3 mistura
    `aint` (223) e `anint` (228) sobre o mesmo campo. Para `pt` inteiro e
-   igual; transcrito literalmente com `_aint`.
+   igual; para `pt = 3.7` o STEP 3 entra no bloco de neve (aint = 3) e
+   escolhe `dmet1(iw,7)` (anint = 4). Transcrito literalmente.
 3. `if(error_type == 2) code2 = 1` depois de `icethick` (344) nao pode ser
    disparado por ela: `icethick` tem fan-out zero e nunca escreve
    `error_type`. So repete o teste da linha 213 sobre o `error_type` que
@@ -130,25 +148,56 @@ Pontos de atencao (comportamento do original preservado)
    gfortran: branco de inicio de registro, `I12` e um branco antes de
    texto que segue numero -- `"  Start of run         100 of ..."`,
    conferido no TDM-GCC.
+14. `dmet1(iw,5) = dmin1(met(iw,ip_rh),1d2)` so limita a umidade a 100%. A
+   linha comentada logo acima (165, `dmax1(1d-1, rh)`) e a usada em
+   open_water; aqui nao ha piso, entao umidade 0 ou negativa passa.
+15. `met` e alterado no proprio lugar: precipitacao <= eps vira 0 com tipo
+   1 (166-179); depois de canopy_met, `met(iw,ip_pt2) = 3` se houver neve
+   (204); e `met(iw,ip_tsoil)` e SOBRESCRITO com a temperatura do no
+   superior (256). `dmet1(iw,13)` guarda a temperatura original.
+16. O bloco 239-244 (zerar `dsnow`, `phie`, `newsd` e `pdens` sem neve
+   acumulada e `newsd < 2d-3`) esta COMENTADO aqui; em open_water esta
+   ativo. Nao transcrito.
+17. `dsnow` nao depende de entrada nenhuma: vale sempre
+   2d-2*((3/(4*pi))*5d-5)**(1/3) arredondado a 10 casas (~4,571d-4).
+18. `canopy_met` recebe `oldsd`, a profundidade de neve do passo ANTERIOR
+   (`oldsd = hsaccum` so no STEP 5).
+19. O arredondamento a 15 casas de `dmet1` (189-191) acontece antes de
+   `canopy_met`, que altera `dmet1` sem arredondar de novo.
+20. `pdens` e zerado a cada chamada; so e diferente de zero com neve nova.
+   Divisao por zero em `newsd` (pdens = 0) segue IEEE (inf ou NaN), via
+   `_fdiv`.
+21. O cabecalho (97-105) cita low_veg_prop, canopy_met, new_profile,
+   soil_strength, snow_model, icethick, dense e met_date. `met_date` e
+   declarada (122) e nunca usada; `read_old_data` (580) e chamada e nao
+   consta.
 """
 
 import math
 from dataclasses import dataclass, field
 
-from .albedo_emis import AlbedoEmisState
-from .constants import EPS, MOVERLAP, TREF
+from .albedo_emis import AlbedoEmisState, albedo_emis
+from .constants import EPS, MOVERLAP, NCLAYERS, PI, TREF
+from .flow_param import flow_param
 from .functions import Phase, dense
 from .icethick import icethick
 from .indices import MetCol
-from .module_canopy import CanopySavedState
-from .module_lowveg import LowVegState
+from .module_canopy import CanopySavedState, canopy_met
+from .module_lowveg import LowVegState, low_veg_prop, lowveg_met
+from .new_profile import NewProfileState, new_profile
 from .read_old_data import read_old_data
 from .snow import SnowState, snow_model
+from .soil_moisture import soil_moisture
 from .soil_strength import soil_strength
+from .soil_tmp import soil_tmp
 from .state import FasstState
+from .sub_divide import sub_divide
+from .surfenergy import LowVegMetResult
+from .th_param import th_param
 from .write_outputs import _fmt_e, _fmt_f, _fmt_i
 
-__all__ = ["FasstMainState", "fasst_main", "step3a", "step4", "step5"]
+__all__ = ["FasstMainState", "fasst_main", "step1", "step2", "step3", "step3a",
+           "step4", "step5", "step6"]
 
 
 @dataclass
@@ -167,6 +216,19 @@ class FasstMainState:
     canopy: CanopySavedState = field(default_factory=CanopySavedState)
     alb: AlbedoEmisState = field(default_factory=AlbedoEmisState)
     lowveg: LowVegState = field(default_factory=LowVegState)
+    profile: NewProfileState = field(default_factory=NewProfileState)   # so fasst_main chama new_profile
+
+
+def _fdiv(x, y):
+    """Divisao IEEE-754: x/0 -> +-inf ou nan, sem levantar excecao."""
+    x = float(x)
+    y = float(y)
+    if y == 0.0:
+        if x == 0.0 or math.isnan(x):
+            return math.nan
+        neg = (math.copysign(1.0, x) < 0) != (math.copysign(1.0, y) < 0)
+        return -math.inf if neg else math.inf
+    return x / y
 
 
 def _anint(x, p=0):
@@ -304,23 +366,166 @@ def _q5(x):
 
 def step1(state: FasstState):
     """STEP 1 (linhas 148-198): met do passo em `dmet1(iw,·)` e propriedades
-    da vegetacao baixa. A transcrever (outro integrante da equipe)."""
-    raise NotImplementedError("fasst_main STEP 1 ainda nao foi traduzido")
+    da vegetacao baixa."""
+    iw = state.iw
+    met = state.met
+    dmet1 = state.dmet1
+    # initialize the met calc variable dmet1(iw,)
+    dmet1[iw, 1] = met[iw, MetCol.TSOL]
+    if dmet1[iw, 1] < 1e-2:
+        dmet1[iw, 1] = 0.0
+    dmet1[iw, 2] = met[iw, MetCol.IR]
+    dmet1[iw, 3] = met[iw, MetCol.WS]
+    dmet1[iw, 4] = met[iw, MetCol.TMP] + TREF                  # K
+
+    # dmin1 -> min: com NaN o resultado do Fortran depende do compilador
+    # (gfortran 13: -O0 propaga o NaN, como o min do Python; -O2 devolve 100)
+    dmet1[iw, 5] = min(met[iw, MetCol.RH], 1e2)                # % (ponto 14)
+    if met[iw, MetCol.PREC] <= EPS:
+        met[iw, MetCol.PREC] = 0.0
+        met[iw, MetCol.PT] = 1
+
+    dmet1[iw, 6] = met[iw, MetCol.PREC] * 1e-3                 # m/timstep (rain and/or snow)
+    if dmet1[iw, 6] <= EPS:
+        met[iw, MetCol.PT] = 1.0
+
+    if met[iw, MetCol.PREC2] <= EPS:
+        met[iw, MetCol.PREC2] = 0.0
+        met[iw, MetCol.PT2] = 1
+    dmet1[iw, 7] = met[iw, MetCol.PREC2] * 1e-3                # m/timstep (snow only)
+    if dmet1[iw, 7] <= EPS:
+        met[iw, MetCol.PT2] = 1.0
+
+    dmet1[iw, 8] = met[iw, MetCol.UPSOL]
+    if abs(dmet1[iw, 1]) <= EPS:
+        dmet1[iw, 8] = 0.0
+    dmet1[iw, 9] = met[iw, MetCol.DIR]
+    dmet1[iw, 10] = met[iw, MetCol.DIF]
+    dmet1[iw, 11] = met[iw, MetCol.AP]
+    dmet1[iw, 12] = met[iw, MetCol.IRUP]
+    dmet1[iw, 13] = met[iw, MetCol.TSOIL]                      # original (ponto 15)
+
+    for i in range(1, 14):
+        dmet1[iw, i] = _anint(dmet1[iw, i] * 1e15) * 1e-15    # antes de canopy_met (ponto 19)
+
+    # get the low vegetation properties
+    if state.veg_flagl == 1:
+        low_veg_prop(state, dmet1[iw, 4], state.dzveg[NCLAYERS])
+    else:
+        state.sigfl = 0.0
 
 
 def step2(state: FasstState, fm: FasstMainState, oldsd, code2):
-    """STEP 2 (linhas 200-216): temperatura/umidade do dossel. Devolve `code2`.
-    A transcrever (outro integrante da equipe)."""
-    raise NotImplementedError("fasst_main STEP 2 ainda nao foi traduzido")
+    """STEP 2 (linhas 200-216): temperatura/umidade do dossel. Devolve `code2`."""
+    iw = state.iw
+    met = state.met
+    if state.veg_flagh == 1:
+        canopy_met(state, fm.canopy, fm.alb, oldsd)            # oldsd do passo ANTERIOR (ponto 18)
+        if state.dmet1[iw, 7] > 0.0:
+            met[iw, MetCol.PT2] = 3.0
+        if state.dmet1[iw, 6] <= EPS:
+            met[iw, MetCol.PT] = 1.0
+        if state.dmet1[iw, 7] <= EPS:
+            met[iw, MetCol.PT2] = 1.0
+    else:
+        state.surfemisc[iw] = state.mflag
+        for i in range(1, NCLAYERS + 1):
+            state.canopy_temp[i, iw] = state.mflag
+    if state.error_type == 2:
+        code2 = 1
+
+    state.airt[1, iw] = met[iw, MetCol.TMP] + TREF
+    state.airt[2, iw] = state.dmet1[iw, 4]
+    return code2
+
+
+def _new_profile(state, fm, code5, pdens, oldsd, simelt, phie):
+    """Adaptador de `call new_profile(code5,first_time,pdens,oldsd,simelt,phie,fsup,firup)`.
+
+    Liga as dependencias injetadas de `new_profile` as funcoes reais,
+    ajustando as assinaturas que diferem do contrato (ver docstring).
+    `fsup`/`firup` entram 0: `new_profile` os zera antes de ler.
+    Devolve `(code5, phie, fsup, firup)`.
+    """
+    def _albedo_emis(st, o, sd, su):
+        albedo_emis(st, fm.alb, o, sd, su)
+
+    def _sub_divide(st, ii, delvar, delvar1, dmet):
+        dmet[1:14] = sub_divide(st, ii, delvar, delvar1)[1:14]     # intent(out) no lugar
+
+    def _soil_moisture(st, *args):
+        runoff = args[-1]
+        r, rhs_errorm, errorm, smerror, sert1 = soil_moisture(st, *args)
+        runoff[:] = r                                               # intent(inout) no lugar
+        return rhs_errorm, errorm, smerror, sert1
+
+    def _lowveg_met(st, ii, iter_, pt1, pt2, mixrgr, wetness, taf, dmet, wetbulba):
+        rhoaf, cf, pheatf, rpp, mixra, mixrf, dqdtf = lowveg_met(
+            st, fm.lowveg, ii, iter_, pt1, pt2, mixrgr, wetness, taf, dmet, wetbulba)
+        # module_lowveg nao altera `wetbulba`: volta o valor de entrada
+        return LowVegMetResult(rhoaf=rhoaf, cf=cf, pheatf=pheatf, rpp=rpp, mixra=mixra,
+                               mixrf=mixrf, dqdtf=dqdtf, wetbulba=wetbulba)
+
+    res = new_profile(
+        state, fm.profile, code5, fm.first_time, pdens, oldsd, simelt, phie, 0.0, 0.0,
+        albedo_emis_fn=_albedo_emis, th_param_fn=th_param, flow_param_fn=flow_param,
+        sub_divide_fn=_sub_divide, soil_moisture_fn=_soil_moisture,
+        soil_tmp_fn=soil_tmp, lowveg_met=_lowveg_met)
+    fm.first_time = res.first_time
+    return res.code5, res.phie, res.fsup, res.firup
 
 
 def step3(state: FasstState, fm: FasstMainState, code3, code5, pdens, oldsd, phie):
     """STEP 3 (linhas 218-271): neve nova e `new_profile`.
 
-    Devolve `(code3, code5, pdens, phie, fsup, firup)`. A transcrever (outro
-    integrante da equipe).
+    Devolve `(code3, code5, pdens, phie, fsup, firup)`.
     """
-    raise NotImplementedError("fasst_main STEP 3 ainda nao foi traduzido")
+    iw = state.iw
+    met = state.met
+    dmet1 = state.dmet1
+    # determine density and amount of new snow if no existing snow on ground
+    state.newsd = 0.0
+    pdens = 0.0                                                # zerado a cada passo (ponto 20)
+    smm = dmet1[iw, 6] + dmet1[iw, 7]
+    if (_aint(met[iw, MetCol.PT]) == 3 or _aint(met[iw, MetCol.PT2]) == 3) and smm > 0.0:
+        pdens = dense(dmet1[iw, 4], dmet1[iw, 3], Phase.SNOW)  # kg/m^3 (d1i = 4)
+
+        if _anint(met[iw, MetCol.PT]) == 3:                    # sic: anint (ponto 2)
+            state.newsd = _fdiv(dmet1[iw, 6] * 1e3, pdens)     # m snow
+        else:
+            state.newsd = _fdiv(dmet1[iw, 7] * 1e3, pdens)
+        state.newsd = _anint(state.newsd * 1e10) * 1e-10
+        state.dsnow = 2e-2 * ((3.0 / (4.0 * PI)) * 5e-5) ** (1.0 / 3.0)   # constante (ponto 17)
+        state.dsnow = _anint(state.dsnow * 1e10) * 1e-10
+        phie = (1.0 - pdens * 1e-3) * 0.95
+        phie = _anint(phie * 1e10) * 1e-10
+        # linhas 239-244 comentadas no original (ponto 16)
+
+    # calculate the new moisture and temperature profiles
+    simelt = state.vsmelt + state.vimelt
+    state.hm = state.hsaccum + state.newsd + state.hi          # m
+
+    code5, phie, fsup, firup = _new_profile(state, fm, code5, pdens, oldsd, simelt, phie)
+
+    if state.error_type == 3:
+        code3 = 1
+
+    met[iw, MetCol.TSOIL] = state.stt[state.nnodes]            # sobrescreve o met (ponto 15)
+    state.surfemis[iw] = state.emis
+
+    if state.veg_flagl == 1:
+        state.ft[iw] = state.ftemp
+        state.surfemisf[iw] = state.epf
+    else:
+        state.ft[iw] = state.mflag
+        state.surfemisf[iw] = state.mflag
+    state.tt[iw] = state.toptemp
+
+    state.vsmelt = 0.0
+    state.vimelt = 0.0
+    state.refreeze = 0.0
+    state.refreezei = 0.0
+    return code3, code5, pdens, phie, fsup, firup
 
 
 def _surface_averages(state, surfdepth):
@@ -590,6 +795,42 @@ def demo():
         st.met[2, MetCol.PT2] = 1.0
         st.unit55 = io.StringIO()
         return st
+
+    # ---- STEP 1 ----
+    st = novo()
+    st.met[2, MetCol.TSOL] = 5e-3                        # < 1d-2 vira 0, e upsol junto
+    st.met[2, MetCol.UPSOL] = 40.0
+    st.met[2, MetCol.TMP] = 1.0
+    st.met[2, MetCol.RH] = 130.0
+    st.met[2, MetCol.PREC], st.met[2, MetCol.PT] = -0.0, 3.0
+    st.met[2, MetCol.TSOIL] = 7.0
+    step1(st)
+    assert st.dmet1[2, 1] == 0.0 and st.dmet1[2, 8] == 0.0
+    def q15(x):                                          # quantizado a 1d-15: 100 -> 100.00000000000001
+        return _anint(x * 1e15) * 1e-15
+    assert st.dmet1[2, 4] == q15(1.0 + TREF) and st.dmet1[2, 5] == q15(100.0)
+    assert st.met[2, MetCol.PREC] == 0.0 and st.met[2, MetCol.PT] == 1
+    assert st.dmet1[2, 13] == q15(7.0) and st.sigfl == 0.0
+
+    # ---- STEP 3 (new_profile postico) ----
+    real_np = mod._new_profile
+    mod._new_profile = lambda s, f, c5, pd, od, sm, ph: (c5, ph, 1.0, 2.0)
+    try:
+        st = novo()
+        st.nnodes = 1
+        st.met[2, MetCol.PT], st.met[2, MetCol.PT2] = 3.7, 1.0   # aint 3 entra, anint 4 -> dmet1(7)
+        st.dmet1[2, 3], st.dmet1[2, 4] = 2.0, 268.0
+        st.dmet1[2, 6], st.dmet1[2, 7] = 0.0, 1e-2
+        st.stt[1] = 270.0
+        r = step3(st, FasstMainState(), 0, 0, 0.0, 0.0, 0.0)
+        pd = dense(268.0, 2.0, Phase.SNOW)
+        assert r[2] == pd and r[4:] == (1.0, 2.0)
+        assert st.newsd == _anint(1e-2 * 1e3 / pd * 1e10) * 1e-10
+        assert st.dsnow == _anint(2e-2 * ((3.0 / (4.0 * math.pi)) * 5e-5) ** (1.0 / 3.0) * 1e10) * 1e-10
+        assert r[3] == _anint((1.0 - pd * 1e-3) * 0.95 * 1e10) * 1e-10
+        assert st.met[2, MetCol.TSOIL] == 270.0 and st.hm == st.newsd
+    finally:
+        mod._new_profile = real_np
 
     # ---- STEP 3a ----
     st = novo()

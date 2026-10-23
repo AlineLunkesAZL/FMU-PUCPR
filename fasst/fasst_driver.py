@@ -65,8 +65,7 @@ O driver e o dono de tres coisas que nenhum outro modulo pode assumir:
 
 Estado desta transcricao
 --------------------------
-Cronograma de 10 dias uteis CONCLUIDO, e as 5 dependencias externas ligadas
-(`fasst_main` ainda parcial, ver abaixo).
+Cronograma de 10 dias uteis CONCLUIDO, e as 5 dependencias externas ligadas.
   Dia 1  esqueleto, docstring, os 5 stubs externos
   Dia 2  `_Unit`/`_strip_comment`, secao de declaracoes, STEP 0 e o
          cabecalho de `fassti.inp` (linhas 109-266)
@@ -85,15 +84,15 @@ Cronograma de 10 dias uteis CONCLUIDO, e as 5 dependencias externas ligadas
   depois  integracao das 4 dependencias externas transcritas
           (`open_water`, `read_complex`, `read_old_data`,
           `write_outputs`), conferida contra o FASST compilado
-  depois  `fasst_main` ligada (STEPS 3a, 4, 5 e 6; os STEPS 1, 2 e 3
-          sao stubs, com outro integrante da equipe)           <-- aqui
+  depois  `fasst_main` ligada (STEPS 3a, 4, 5 e 6)
+  depois  `fasst_main` completa: STEPS 1, 2 e 3 (Allan) e `new_profile`
+          real ligada                                          <-- aqui
 
 O `program` esta TRANSCRITO DE PONTA A PONTA: `main()` roda do primeiro
 registro de `fassti.inp` ao `stop` da linha 1479, e as 5 sub-rotinas
-externas sao reais. O caminho de AGUA (`water_flag == 3`: `initwater` ->
-`open_water` -> `write_outputs`) roda inteiro em Python; o de TERRA
-(`initsurface` -> `fasst_main` -> `write_outputs`) para no stub do STEP 1
-de `fasst_main` ate os STEPS 1, 2 e 3 serem transcritos.
+externas sao reais. Os dois caminhos rodam inteiros em Python: AGUA
+(`water_flag == 3`: `initwater` -> `open_water` -> `write_outputs`) e
+TERRA (`initsurface` -> `fasst_main` -> `new_profile` -> `write_outputs`).
 
 Verificacao contra o Fortran: `cmp_fortran_agua.py` (raiz do repo, nao
 versionado) compila o FASST original com gfortran (TDM-GCC, `-O0`) e roda
@@ -105,9 +104,13 @@ o segundo faz hot start (`infer_test = 1`, `istart = 2`) lendo os
 binarios que o PROPRIO Fortran escreveu no primeiro -- `read_old_data`
 modos 3 e 1. Sairam IDENTICOS byte a byte: unidade 2 (`.fst`, FORMAT
 1000/1001), unidade 28 (`.vgt`, FORMAT 1004 e a interpolacao de `t1`),
-`inferred.out` e os dois binarios de hot start (`access='stream'`). Nao
-verificado: o caminho de terra inteiro (para nos stubs de `fasst_main`),
-logo a unidade 24 (`.flx` com corpo) e o `.grd`. Diferencas restantes, nenhuma do driver:
+`inferred.out` e os dois binarios de hot start (`access='stream'`).
+Caminho de TERRA (seis casos no mesmo script): solo nu (`terra`,
+`terra_fria`) sai IDENTICO no `.fst`, `.flx`, `.grd` e `.snw`; o
+`_ro_soil.dat` difere em 1 ULP em 4 registros. Com vegetacao (`grama`,
+`floresta`, `um_terra`, `um_terra_hot`) o `.grd`/`.fst`/`.flx`/`.vgt`
+DIVERGEM (temperatura do no superior ~290 K no Python contra ~301 K no
+Fortran, ja na 1a hora) -- PENDENTE, ver Pendencias. Diferencas restantes no caminho de agua, nenhuma do driver:
   * `phie` em `_ro_soil.dat` no caso sem neve: local nao inicializada de
     `open_water`, lixo de pilha no Fortran, 0.0 aqui (ponto 3 de
     open_water.py);
@@ -421,9 +424,10 @@ correspondente do codigo, conforme for preenchido.
 
 Pendencias
 ------------
-* STEPS 1, 2 e 3 de `fasst_main` (stubs em fasst/fasst_main.py, com outro
-  integrante da equipe); desbloqueiam o caminho de terra, que depois tem
-  de ser conferido contra o FASST compilado.
+* Caminho de terra COM vegetacao diverge do FASST compilado (casos
+  `grama`/`floresta`/`um_terra` de `cmp_fortran_agua.py`); solo nu confere.
+  Suspeitos: o ramo vegetado de `surfenergy`/`lowveg_met` (o `dmet` que
+  recebe -- ver ponto 1 de open_water.py) e `low_veg_prop`/`canopy_met`.
 * `makemtagroundout` / `makemtafasstout` (1428-1430) estao comentadas no
   proprio Fortran. Nao transcrever.
 * VALOR FINAL DE VARIAVEL DE LACO -- conferir em cada dia que falta. Um
@@ -446,9 +450,8 @@ Pendencias
   incremento explicito, igual ao original.
 * Os ganchos `_state`/`_locals` FICAM, por ora. A nota do Dia 8 dizia para
   remove-los "quando `main` rodar ate o fim e essas coisas virarem
-  observaveis pelos arquivos de saida" -- `main` agora roda ate o fim, mas
-  a segunda metade so se cumpre no caminho de agua: o de terra para nos
-  stubs dos STEPS 1-3 de `fasst_main`. E o `demo()` le por eles centenas de asserts sobre locais do
+  observaveis pelos arquivos de saida" -- `main` agora roda ate o fim nos
+  dois caminhos, mas o `demo()` le por eles centenas de asserts sobre locais do
   `program` (ponto 5, `_step6`, ...) que nenhum arquivo de saida mostra;
   tira-los e reescrever esse demo. Mantidos por decisao do usuario
   (22/10/2026).
