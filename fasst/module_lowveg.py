@@ -260,7 +260,7 @@ def lowveg_met(
     # confirmada.
     moist = sp_humid(f1i, dmet[10], state.ftemp, c2, c1)
     mixrf = moist.mixr
-    dqdtf = moist.dqdt
+    dqdtf = moist.dmrdt  # 7o argumento de sp_humid e dmrdt, nao dqdt (sp_humid.py, ponto 8)
     vpressf = moist.vpress
     wetbulbf = moist.wetbulb  # calculado, não utilizado adiante (ver Fortran)
 

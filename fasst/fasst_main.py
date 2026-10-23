@@ -82,7 +82,9 @@ Dependencias externas (todas reais)
                       `dmet` e o invólucro o copia no array de
                       `new_profile`; `soil_moisture` devolve `runoff` e o
                       invólucro o copia no lugar; `lowveg_met` recebe
-                      `fm.lowveg` e devolve 7-tupla, que vira
+                      `fm.lowveg`, le `dmet` 0-based (o de `surfenergy`
+                      e 1-based: o invólucro converte e copia de volta,
+                      e `intent(inout)`) e devolve 7-tupla, que vira
                       `LowVegMetResult` com o `wetbulba` de entrada
                       (module_lowveg nao o altera).
   soil_strength(state, nstr_flag) -> (ss_strengtho, ll_strengtho, scbro)
@@ -460,8 +462,12 @@ def _new_profile(state, fm, code5, pdens, oldsd, simelt, phie):
         return rhs_errorm, errorm, smerror, sert1
 
     def _lowveg_met(st, ii, iter_, pt1, pt2, mixrgr, wetness, taf, dmet, wetbulba):
+        # `dmet` aqui e 1-based (posicao 0 fantasma); module_lowveg.lowveg_met
+        # o le 0-based (dmet[0] == dmet(1)). intent(inout): volta copiado.
+        seq = [float(v) for v in dmet[1:14]]
         rhoaf, cf, pheatf, rpp, mixra, mixrf, dqdtf = lowveg_met(
-            st, fm.lowveg, ii, iter_, pt1, pt2, mixrgr, wetness, taf, dmet, wetbulba)
+            st, fm.lowveg, ii, iter_, pt1, pt2, mixrgr, wetness, taf, seq, wetbulba)
+        dmet[1:14] = seq
         # module_lowveg nao altera `wetbulba`: volta o valor de entrada
         return LowVegMetResult(rhoaf=rhoaf, cf=cf, pheatf=pheatf, rpp=rpp, mixra=mixra,
                                mixrf=mixrf, dqdtf=dqdtf, wetbulba=wetbulba)

@@ -1362,7 +1362,7 @@ def canopy_moist(state: FasstState, ncsnow, lai, x, ful, rh_prof, tai):
 
         c2 = 1.0
         moist = sp_humid(f1i, state.met[state.iw, MetCol.AP], x[i] + TREF, c2, c1)
-        mixrf, dqdtf, vpressf = moist.mixr, moist.dqdt, moist.vpress
+        mixrf, dqdtf, vpressf = moist.mixr, moist.dmrdt, moist.vpress  # 7o arg = dmrdt
 
         t1 = 3e-4 * (vpressf - vpressa)
         if vpressf != vpressa and abs(t1) < 50.0:

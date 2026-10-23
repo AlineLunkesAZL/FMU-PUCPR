@@ -105,12 +105,16 @@ binarios que o PROPRIO Fortran escreveu no primeiro -- `read_old_data`
 modos 3 e 1. Sairam IDENTICOS byte a byte: unidade 2 (`.fst`, FORMAT
 1000/1001), unidade 28 (`.vgt`, FORMAT 1004 e a interpolacao de `t1`),
 `inferred.out` e os dois binarios de hot start (`access='stream'`).
-Caminho de TERRA (seis casos no mesmo script): solo nu (`terra`,
-`terra_fria`) sai IDENTICO no `.fst`, `.flx`, `.grd` e `.snw`; o
-`_ro_soil.dat` difere em 1 ULP em 4 registros. Com vegetacao (`grama`,
-`floresta`, `um_terra`, `um_terra_hot`) o `.grd`/`.fst`/`.flx`/`.vgt`
-DIVERGEM (temperatura do no superior ~290 K no Python contra ~301 K no
-Fortran, ja na 1a hora) -- PENDENTE, ver Pendencias. Diferencas restantes no caminho de agua, nenhuma do driver:
+Caminho de TERRA (seis casos no mesmo script: solo nu, grama, grama +
+arvores, neve, multiponto e hot start): `.fst`, `.flx`, `.grd`, `.vgt` e
+`.snw` sairam IDENTICOS em todos; `grama`, `um_terra` e `um_terra_hot`
+tambem no `_ro_soil.dat`. Em `terra`, `floresta` e `terra_fria` o
+`_ro_soil.dat` difere em poucos bytes (ordem de 1 ULP a 1e-6 relativo).
+A comparacao achou e corrigiu, fora do driver: `module_lowveg.py` e
+`module_canopy.py` tiravam `dqdtf` de `sp_humid(...).dqdt` onde o Fortran
+passa a posicao de `dmrdt`; e o adaptador de `lowveg_met` em
+fasst_main.py tem de converter o `dmet` 1-based de `surfenergy` para o
+0-based que `module_lowveg` le. Diferencas restantes no caminho de agua, nenhuma do driver:
   * `phie` em `_ro_soil.dat` no caso sem neve: local nao inicializada de
     `open_water`, lixo de pilha no Fortran, 0.0 aqui (ponto 3 de
     open_water.py);
@@ -424,10 +428,8 @@ correspondente do codigo, conforme for preenchido.
 
 Pendencias
 ------------
-* Caminho de terra COM vegetacao diverge do FASST compilado (casos
-  `grama`/`floresta`/`um_terra` de `cmp_fortran_agua.py`); solo nu confere.
-  Suspeitos: o ramo vegetado de `surfenergy`/`lowveg_met` (o `dmet` que
-  recebe -- ver ponto 1 de open_water.py) e `low_veg_prop`/`canopy_met`.
+* `_ro_soil.dat` de terra (`terra`, `floresta`, `terra_fria`) ainda
+  difere do Fortran em poucos bytes; as saidas de texto conferem.
 * `makemtagroundout` / `makemtafasstout` (1428-1430) estao comentadas no
   proprio Fortran. Nao transcrever.
 * VALOR FINAL DE VARIAVEL DE LACO -- conferir em cada dia que falta. Um
