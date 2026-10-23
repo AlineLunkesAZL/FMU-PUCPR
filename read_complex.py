@@ -34,8 +34,9 @@ como o chamador os deixou (como no Fortran). `lcount` vale sempre 0 (o
 Fortran so o zera). As variaveis `intent(out)` nao sao entrada.
 
 Constantes (`EPS`, `PI`, `SPFLAG`, `TREF`, `MAXL`, `MAXN`) vem de
-`fasst.constants`. `state.unit5` e o `_Unit` de texto do driver, ja
-aberto (fasst_driver.py, STEP 3); daqui so se usa `readline()`.
+`fasst.constants`. `state.unit5` e um objeto de texto com `readline()`,
+ja aberto (a convencao `state.unitNN` segue a dos demais modulos e nao foi
+confirmada contra o driver).
 
 Leitura em lista livre (`read(5,*,iostat=io) ...`)
 ----------------------------------------------------
@@ -69,17 +70,15 @@ fora de 32 bits, aspas sem fechar, `+`/`-` soltos no fim do arquivo e uma
 primeira linha em branco seguida de virgula. Esses casos nao aparecem em
 uma linha de entrada bem formada.
 
-sort2
--------
+sort2 (dependencia nao fornecida)
+-----------------------------------
 O cabecalho do .F90 diz "no subroutines called", mas o ultimo ramo
-(`nlayers1 > 0`, linhas 397-447) chama `sort2`, que e a sub-rotina
-apendada a `fasst_driver.F90` (1483-1534). Usa-se a transcricao de la,
-`fasst_driver.sort2(n, arr, arr1) -> (ncount, b, b1)`, importada DENTRO
-da funcao: o driver importa este modulo, e um import no topo seria
-circular. Como no Fortran, ela ordena `arr`/`arr1` in-place (o segundo
-laco do ramo reusa `lthick2`/`soiltype2` ja ordenados) e devolve `b`/`b1`
-novos, que aqui passam a ser `lthick3`/`soiltype3` e `lthick4`/
-`soiltype4`.
+(`nlayers1 > 0`, linhas 397-447) chama `sort2(n, a, b, m, a_out, b_out)`,
+que nao esta em nenhum arquivo recebido (`sort_locate.py` so tem `sort`
+e `locate` provisorios). Aqui `sort2` e um stub explicito que levanta
+`NotImplementedError`. A assinatura assumida -- `sort2(n, a, b, a_out,
+b_out)` preenche `a_out`/`b_out` in-place e devolve `m` -- e so a forma de
+chamada; nada sobre o que a funcao faz foi suposto.
 
 Pontos de atencao (preservados do Fortran, nao corrigidos)
 ------------------------------------------------------------
@@ -366,6 +365,15 @@ class _ListaLivre:
         if self.io == 0 and self.linha is not None:
             self._barra_no_fim()
         self.linha = None
+
+
+# ---------------------------------------------------------------------------
+# Dependencia externa nao fornecida
+# ---------------------------------------------------------------------------
+def sort2(n, a, b, a_out, b_out):
+    """TODO: `sort2` nao esta em nenhum arquivo recebido (ver docstring)."""
+    raise NotImplementedError(
+        "sort2 nao foi fornecida (read_complex.F90, linhas 413 e 431)")
 
 
 def _grava(arr, k, valor):
@@ -783,7 +791,6 @@ def read_complex(state: FasstState, wtype, io, wvel, wdepth, sname):
         state.soiltype[3] = 7
         state.lthick[3] = 1.0
     elif nlayers1 > 0:
-        from .fasst_driver import sort2      # circular no topo -- ver docstring
         kk = nlayers1 + nlayers
         j = 1
         d1 = 0.0
@@ -798,7 +805,7 @@ def read_complex(state: FasstState, wtype, io, wvel, wdepth, sname):
             if lthick2[i] > EPS:
                 j = i
 
-        k, lthick3, soiltype3 = sort2(j, lthick2, soiltype2)
+        k = sort2(j, lthick2, soiltype2, lthick3, soiltype3)
 
         for i in range(1, k + 1):
             lthick3[i] = lthick3[i] - d1
@@ -813,7 +820,7 @@ def read_complex(state: FasstState, wtype, io, wvel, wdepth, sname):
             elif i > nlayers1 and state.soiltype[i - nlayers] != 26:
                 _grava(lthick2, k, d2 + state.lthick[i - nlayers1])
                 _grava(soiltype2, k, state.soiltype[i - nlayers1])
-        jj, lthick4, soiltype4 = sort2(k, lthick2, soiltype2)
+        jj = sort2(k, lthick2, soiltype2, lthick4, soiltype4)
 
         for i in range(1, jj + 1):
             lthick4[i] = lthick4[i] - d1

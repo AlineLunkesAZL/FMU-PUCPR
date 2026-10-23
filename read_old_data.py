@@ -39,30 +39,31 @@ chamada dos dois chamadores inalterada).
 
 Os argumentos dos chamadores sao `d1i` (= `iomode`) e `state.mpos`
 (= `ii`); os stubs que `initwater.py`/`initsurface.py` tinham foram
-substituidos por import desta funcao. O driver chama com `d1i = 3` e
-`state.dstart`.
+substituidos por import desta funcao.
 
 Arquivos binarios (formato)
 -----------------------------
-O driver abre as quatro unidades com `form='unformatted',
-access='stream'` (fasst_driver.F90:990-1010): os dados sao gravados em
-sequencia, SEM marcadores de registro -- cada `write` so acrescenta os
-bytes da lista. `integer(ip)` ocupa 4 bytes, `real(dp)` 8 e
-`character(len=n)` n bytes, little-endian. Este modulo emula isso com
-`_rd`/`_wr`, conferidos contra o gfortran (TDM-GCC) com um programa de
-sondagem:
+Os arquivos sao "unformatted sequential" do gfortran: cada instrucao
+`read`/`write` de uma lista de variaveis e UM registro, com um marcador
+de 4 bytes (inteiro, little-endian) com o tamanho em bytes antes e
+depois dos dados. `integer(ip)` ocupa 4 bytes, `real(dp)` 8 e
+`character(len=n)` n bytes. Este modulo emula isso com `_rd`/`_wr`:
 
-* leitura que passa do fim do arquivo -> as variaveis que couberam
-  inteiras sao atribuidas; a que ficou pela metade recebe os bytes
-  disponiveis SOBRE o valor anterior (um real de 8 bytes com so 4
-  disponiveis troca os 4 primeiros bytes e mantem os outros 4 do valor
-  antigo); as demais ficam como estavam; `iostat` vale -1;
+* leitura de um registro mais curto que a lista -> as variaveis que
+  couberam inteiras sao atribuidas; a que ficou pela metade recebe os
+  bytes disponiveis SOBRE o valor anterior (comportamento observado no
+  gfortran: um real de 8 bytes com so 7 disponiveis troca os 7 primeiros
+  bytes e mantem o oitavo do valor antigo); as demais ficam como
+  estavam; `iostat` vale 5016 (fim de registro). Leitura sem registro
+  (fim de arquivo) -> nada e atribuido e `iostat` vale -1. Leitura de um
+  registro mais longo que a lista -> o excedente e ignorado;
 * a execucao continua depois de uma leitura com erro, igual ao Fortran
   (que so olha `iostat` no teste `io /= -1` do laco externo).
 
-As unidades sao os `_Unit` binarios do driver, ja abertos em
-`state.unit11`, `state.unit12` (leitura, `'rb'`) e `state.unit17`,
-`state.unit18` (escrita, `'wb'`) -- conferido contra `fasst_driver.py`.
+As unidades sao objetos binarios ja abertos em `state.unit11`,
+`state.unit12` (leitura, `'rb'`) e `state.unit17`, `state.unit18`
+(escrita, `'wb'`). Essa convencao de nomes segue a dos demais modulos
+(`initsurface.py`) e ainda nao foi confirmada contra o driver.
 
 Pontos de atencao (preservados do Fortran, nao corrigidos)
 ------------------------------------------------------------
@@ -84,40 +85,28 @@ Pontos de atencao (preservados do Fortran, nao corrigidos)
   `jline`); aqui levanta `EOFError` (unico desvio de comportamento do
   modulo). Com `freq_id` casando e sem `'endr'` o laco acaba apos
   `MOVERLAP` registros, igual ao Fortran.
-* Modo 2 grava a data/hora (unidade 18) em DOIS `write` -- quatro
-  reais e depois `'loop'`/`'endr'` -- e o modo 3 le `timeo(i,1:4)` e
-  `jline` num `read` so. Em `access='stream'` isso e consistente (36
-  bytes em sequencia nos dois lados); so seria defeito em acesso
-  sequencial, que o driver nao usa.
+* Modo 2 grava a data/hora (unidade 18) em DOIS registros -- quatro
+  reais e depois `'loop'`/`'endr'` -- mas o modo 3 le `timeo(i,1:4)` e
+  `jline` em UM so registro (36 bytes). Com arquivos escritos pelo
+  proprio modo 2, a leitura do modo 3 nao enxerga `jline` (fim de
+  registro) e cada registro `'loop'` (4 bytes) cai sobre `timeo(i,1)` como
+  um real incompleto. Preservado; ver Pendencias do documento.
 * Modo 2 grava `canopy_temp(j,ii)`; o modo 1 le para
   `canopy_temp(j,oldpos)` (posicoes diferentes).
 * `avect(0:4,nclayers)`: acessado aqui como `state.avect[i, j]` com
-  `j = 1..nclayers`, como em `module_canopy.py`. Exigia `state.avect` com
-  forma `(5, NCLAYERS+1)`; o `state.py` declarava `(5, NCLAYERS)` e foi
-  corrigido junto com esta integracao.
+  `j = 1..nclayers`, como em `module_canopy.py`, o que exige
+  `state.avect` com forma `(5, NCLAYERS+1)`. O `state.py` atual declara
+  `(5, NCLAYERS)`, que da `IndexError` em `j = NCLAYERS` (ver
+  Pendencias).
 * `km` e `sphm` sao vetores de tamanho `EXTRAN` (3), lidos/gravados
   inteiros no meio da lista de variaveis de neve (17 reais no registro,
   e nao 13). ASSUNCAO: declarados `(1:extran)` em `fasst_global` (o
   `fasst_global.F90` nao foi fornecido); se forem `(0:extran)` o registro
   tem 19 reais e o layout do arquivo muda.
-* DEFEITO DO ORIGINAL, o mais grave do arquivo: o ramo que PULA um
-  registro (`kk /= ii`, linha 118, e o ramo morto, 155) le 13 reais de
-  neve, mas o modo 2 grava 17 (`hi..vimelt` sao 8, mais `km(3)`,
-  `sphm(3)`, `atopf`, `refreeze`, `phie`). O arquivo desalinha 32 bytes,
-  `nnodes`/`ntot` saem de lixo e os lacos de nos leem no fim do arquivo
-  indefinidamente. Como o laco `kk` continua DEPOIS do registro certo ate
-  achar 'endr', isso pega todo hot start cujo bloco tenha mais de um
-  registro -- ou seja, quase todos (`open_water` grava os ultimos
-  `moverlap` passos). Conferido com o FASST compilado: o Fortran trava, e
-  esta traducao trava no mesmo ponto (`_pular_bloco`). Preservado. Com um
-  bloco de UM registro o hot start funciona e foi conferido byte a byte
-  (`cmp_fortran_agua.py`, caso `um_hot`).
-* Modo 1, `freq_id` que nao casa: sem marcadores, o laco externo le os
-  4 bytes SEGUINTES como `ijunk` -- avanca pelo arquivo de 4 em 4 bytes
-  ate achar uma palavra igual a `freq_id` (que pode estar no meio de um
-  real) ou o fim. Preservado.
-* Registro de tempo (36 bytes) lido incompleto no fim do arquivo:
-  `nnodes`/`ntot` ficam com o valor antigo. Nao foi tratado.
+* Registro de tempo (36 bytes) lido incompleto: `nnodes`/`ntot` ficam
+  com o valor antigo e os `read` seguintes perdem o alinhamento com o
+  arquivo (nos dois codigos; no Fortran isso pode virar acesso fora dos
+  limites). Nao foi tratado.
 * No ramo de "pular" os registros, `nnodes` e `ntot` sao lidos para o
   estado mesmo quando `kk /= ii` (o proprio Fortran os sobrescreve).
 """
@@ -133,6 +122,7 @@ _D = "d"      # real(dp), 8 bytes
 _A2 = "a2"    # character(len=2)
 _A4 = "a4"    # character(len=4)
 _SIZE = {_I: 4, _D: 8, _A2: 2, _A4: 4}
+_EOR = 5016   # iostat do gfortran para "fim de registro"
 
 
 class _P:
@@ -171,14 +161,29 @@ def _m(v, old):
     return v
 
 
+def _read_record(f):
+    """Proximo registro `unformatted sequential` (bytes) ou None no fim."""
+    hdr = f.read(4)
+    if len(hdr) < 4:
+        return None
+    n = struct.unpack("<i", hdr)[0]
+    data = f.read(n)
+    if n < 0 or len(data) < n:
+        return None
+    f.read(4)  # marcador final
+    return data
+
+
 def _rd(f, spec):
-    """`read(unit,iostat=io) lista` em `access='stream'` -- (valores, io).
+    """`read(unit,iostat=io) lista` -- devolve (valores, io).
 
     `valores` tem um item por codigo de `spec`: o valor lido, `_P` se o
-    arquivo acabou no meio do item, ou None se nada foi lido.
-    io: 0 ok, -1 fim de arquivo (mesmo com leitura parcial).
+    registro acabou no meio do item, ou None se nada foi lido.
+    io: 0 ok, -1 fim de arquivo, 5016 fim de registro.
     """
-    rec = f.read(sum(_SIZE[c] for c in spec))
+    rec = _read_record(f)
+    if rec is None:
+        return [None] * len(spec), -1
     out = []
     pos = 0
     for k, c in enumerate(spec):
@@ -186,7 +191,7 @@ def _rd(f, spec):
         if pos + sz > len(rec):
             out.append(_P(c, rec[pos:]) if pos < len(rec) else None)
             out.extend([None] * (len(spec) - k - 1))
-            return out, -1
+            return out, _EOR
         if c == _I:
             out.append(struct.unpack_from("<i", rec, pos)[0])
         elif c == _D:
@@ -198,7 +203,7 @@ def _rd(f, spec):
 
 
 def _wr(f, items):
-    """`write(unit) lista` em `access='stream'` -- so os bytes, sem marcador."""
+    """`write(unit) lista` -- um registro com marcadores de 4 bytes."""
     parts = []
     for c, v in items:
         if c == _I:
@@ -208,7 +213,9 @@ def _wr(f, items):
         else:
             n = _SIZE[c]
             parts.append(str(v).ljust(n)[:n].encode("latin-1"))
-    f.write(b"".join(parts))
+    payload = b"".join(parts)
+    mark = struct.pack("<i", len(payload))
+    f.write(mark + payload + mark)
 
 
 def _put(state, names, vals):

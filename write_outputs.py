@@ -40,8 +40,8 @@ estado -- tudo preservado:
 Arquivos de saida: seguindo a convencao dos demais modulos
 (`initsurface.py` usa `state.unit3`, `state.unit55` etc.), as unidades
 sao objetos tipo-arquivo em `state.unit2`, `state.unit28` e
-`state.unit24`, que recebem `.write(str)` -- os mesmos campos que o
-driver abre no STEP 3.
+`state.unit24`, que recebem `.write(str)`. A convencao de nomes ainda
+nao foi confirmada contra o codigo do driver (pendente).
 
 Escrita formatada
 -------------------
@@ -74,16 +74,9 @@ Pontos de atencao (preservados do Fortran, nao corrigidos)
   diminuiu, `fw_flag` mantem o valor do passo anterior (0 no primeiro).
   Os ramos `slushy(i) == 1` e `fw_flag = 5` so sao alcancaveis com
   `i == 1`, porque `else if (i /= 1)` os antecede.
-* `met(i-1,ip_hi)` / `met(i-1,ip_sd)` com `i = 1` e `iw /= 1` (linhas
-  111, 137 e 143): o Fortran le `met(0,c)`, fora dos limites, mas sem
-  `-fcheck=bounds` isso e aritmetica de endereco deterministica -- em
-  ordem de coluna, `met(0,c)` e o elemento `met(maxlines,c-1)`, o ultimo
-  da coluna ANTERIOR. E o caso COMUM, nao um canto: sem hot start
-  `istartp = istart = 1` e `iw` chega aqui valendo `iend + 1`. Emulado
-  literalmente em `_met_ant`; conferido contra o FASST compilado com
-  gfortran, num caso de oceano com gelo, que da `fw_flag = 1` na primeira
-  linha (`hi` contra `met(maxlines, ip_tsoil)`). A traducao anterior lia
-  a linha 0 fantasma (zeros) e dava 0.
+* `met(i-1,...)` com `i = 1` e `iw /= 1` leria fora dos limites no
+  Fortran. Aqui le a linha 0 "fantasma" (zeros), sem erro; so ocorre se
+  `keep` fizer `istartp` valer 1 com `iw /= 1`.
 * A deteccao de ano bissexto na interpolacao da unidade 28 usa o ano de
   `met(i, ip_year)` (passo atual) e nao o de `t1(j,1)` (passo anterior):
   na virada de ano o teste pode usar o calendario errado.
@@ -118,14 +111,6 @@ def _fdiv(x: float, y: float) -> float:
     """Divisao IEEE-754 pura: ``x / 0.0`` -> +-inf / nan, sem levantar."""
     with np.errstate(divide="ignore", invalid="ignore"):
         return float(np.float64(x) / np.float64(y))
-
-
-def _met_ant(met, i, col, maxlines):
-    """`met(i-1,col)` -- com `i = 1`, o `met(0,col)` do Fortran, que em
-    ordem de coluna e `met(maxlines,col-1)` (ver docstring)."""
-    if i > 1:
-        return met[i - 1][col]
-    return met[maxlines][col - 1]
 
 
 def _fint(x: float) -> int:
@@ -408,10 +393,10 @@ def _write_outputs(state: FasstState, flprint, keep, vegint):
                 if met[i][MetCol.HI] > EPS:
                     fw_flag = 6
                     if iw != 1:
-                        if met[i][MetCol.HI] < _met_ant(met, i, MetCol.HI, maxlines):
+                        if met[i][MetCol.HI] < met[i - 1][MetCol.HI]:
                             fw_flag = 1
                 elif i != 1:
-                    if met[i][MetCol.SD] < _met_ant(met, i, MetCol.SD, maxlines):
+                    if met[i][MetCol.SD] < met[i - 1][MetCol.SD]:
                         fw_flag = 1
                 elif slushy[i] == 1:
                     fw_flag = 4
@@ -433,13 +418,13 @@ def _write_outputs(state: FasstState, flprint, keep, vegint):
                 slippery = 4
                 fw_flag = 0
                 if iw != 1:
-                    if met[i][MetCol.HI] < _met_ant(met, i, MetCol.HI, maxlines):
+                    if met[i][MetCol.HI] < met[i - 1][MetCol.HI]:
                         fw_flag = 1
             elif met[i][MetCol.SD] > EPS:
                 slippery = 3
                 fw_flag = 6
                 if iw != 1:
-                    if met[i][MetCol.SD] < _met_ant(met, i, MetCol.SD, maxlines):
+                    if met[i][MetCol.SD] < met[i - 1][MetCol.SD]:
                         fw_flag = 1
 
         if abs(met[i][MetCol.SD]) <= EPS:

@@ -33,16 +33,9 @@ numa tupla: `first_loop, code2, code4, oldsd = open_water(...)`.
   * `first_snow` (unica `save::` explicita de `open_water`);
   * os objetos de estado salvo dos modulos chamados, ja definidos no
     projeto: `CanopySavedState` (module_canopy), `AlbedoEmisState`
-    (albedo_emis, usado por canopy_met), `LowVegState` (module_lowveg) e
-    `SnowState` (module_snow).
+    (albedo_emis, usado por canopy_met) e `LowVegState` (module_lowveg).
 Instancie um `OpenWaterState` por execucao e reutilize-o em todas as
-chamadas -- o driver cria UM antes do STEP 4, nunca um por ponto, porque
-um `save` do Fortran dura o programa inteiro.
-
-No Fortran os `save` de `canopy_met`, `albedo_emis`, `lowveg_met` e
-`module_snow` pertencem a essas rotinas, e sao os MESMOS para
-`open_water` e para `fasst_main`: o driver cria o `FasstMainState` com
-`canopy`/`alb`/`lowveg`/`snow` apontando para os deste objeto.
+chamadas.
 
 Constantes (`EPS`, `PI`, `SPFLAG`, `TREF`, `SIGMA`, `IALBEDO`, `IEMIS`,
 `IDENS`, `ITHCOND`, `STHCOND`, `LHFUS`, `MOVERLAP`, `NCLAYERS`) vem de
@@ -59,30 +52,30 @@ Dependencias externas (todas fora deste arquivo)
   sp_humid, dense   fasst.sp_humid / fasst.functions (reais; so a
                     interface usada em module_canopy/module_lowveg)
   read_old_data     fasst.read_old_data   (real)
-  snow_model        fasst.snow            (real)
+  snow_model        fasst.snow            (INTERFACE ASSUMIDA -- ver abaixo)
 
-`snow_model(state, snow, sprint, water_flag, first_snow, sdensi, sdf)
--> (first_snow, sdf, phie1)` -- o `call snow_model(sprint,water_flag,
-first_snow,sdensi,hsaccum,phie)` do Fortran passa `hsaccum` em `sdf` e
-recebe `phie` em `phie1`. Isolado no adaptador `_snow_model`.
+`snow_model` nao foi fornecido junto com esta traducao. O adaptador
+`_snow_model` (unico ponto de contato) assume
+    snow_model(state, sprint, water_flag, first_snow, sdensi, hsaccum,
+               phie) -> (first_snow, hsaccum, phie)
+isto e, os seis argumentos do `call snow_model(...)` do Fortran, com
+`state` na frente e os tres que o original pode alterar devolvidos numa
+tupla. Se o `snow.py` do projeto tiver outra assinatura, so o adaptador
+precisa mudar.
 
 Pontos de atencao (comportamento do original preservado)
 ---------------------------------------------------------
-1. `lowveg_met(...,dmet1,...)`: o original passa o array INTEIRO
-   `dmet1(maxlines,13)` para o dummy `real(dp),intent(inout):: dmet(13)`
-   (module_lowveg.F90:26, tamanho explicito). Isso e associacao de
-   sequencia: `dmet(k)` e o k-esimo elemento de `dmet1` em ordem de
-   COLUNA -- com `maxlines >= 13`, `dmet1(k,1)`, a radiacao solar dos
-   passos 1..13, e nao a linha do passo `iw`. As escritas de
-   `lowveg_met` em `dmet(6)`/`dmet(7)` caem nas mesmas posicoes. Fisica
-   sem sentido, mas e o que o Fortran faz: conferido com gfortran
-   (TDM-GCC), que compila sem aviso e associa exatamente assim. A
-   traducao anterior passava `dmet1(iw,1:13)`; foi trocada pela forma
-   literal, regra do repo (`indices.py:112`: "Preserve literally when
-   transcribing; do not 'fix'"). Isolado em `_dmet_seq` /
-   `_dmet_seq_grava`. Conferido contra o FASST compilado: com a forma
-   literal o `_ro_soil.dat` do caso `multi` de `cmp_fortran_agua.py` sai
-   identico; com a linha `iw` (mutante `DMET_LINHA=1`) diverge.
+1. `lowveg_met(...,dmet1,...)`: o original passa o array inteiro `dmet1`
+   (2D, `dmet1(iw,1..13)`), mas `lowveg_met` (traduzida em
+   module_lowveg.py) trata `dmet` como vetor 1D de 13 posicoes
+   (`dmet(10)` = pressao, `dmet(4)` = temperatura do ar...). Se o dummy do
+   Fortran for um vetor de tamanho explicito, a associacao de sequencia
+   faria `dmet(k) = dmet1(k,1)` (primeira coluna, passos 1..13), o que nao
+   faz sentido fisico. Aqui e passada a linha do passo corrente
+   (`dmet1(iw,1:13)`) e as posicoes alteradas (6 e 7, gotejamento) sao
+   gravadas de volta em `dmet1(iw,:)`. Isolado em `_dmet_linha` /
+   `_dmet_grava`. PENDENTE: conferir a declaracao de `dmet` em
+   module_lowveg.F90.
 2. `watervel` e `waterdep` sao calculados (linhas 97-117) e nunca usados.
 3. `phie` nao e inicializada na lista de zeragem: so recebe valor quando
    ha neve nova. Sem neve nova ela segue indefinida para `snow_model` e
@@ -123,7 +116,7 @@ from .indices import MetCol
 from .module_canopy import CanopySavedState, canopy_met
 from .module_lowveg import LowVegState, low_veg_prop, lowveg_met
 from .read_old_data import read_old_data
-from .snow import SnowState, snow_model
+from .snow import snow_model
 from .sp_humid import sp_humid
 from .state import FasstState
 
@@ -138,7 +131,6 @@ class OpenWaterState:
     canopy: CanopySavedState = field(default_factory=CanopySavedState)
     alb: AlbedoEmisState = field(default_factory=AlbedoEmisState)
     lowveg: LowVegState = field(default_factory=LowVegState)
-    snow: SnowState = field(default_factory=SnowState)
 
 
 # data scorr / data walbedo, wemis (open_water.F90, linhas 49-53); posicao 0 fantasma
@@ -202,31 +194,23 @@ def _pow4(x):
         return math.inf
 
 
-def _dmet_pos(state, k):
-    """Posicao (linha, coluna) do k-esimo elemento de `dmet1(maxlines,13)`
-    em ordem de coluna -- a associacao de sequencia do ponto de atencao 1."""
-    n = state.dmet1.shape[0] - 1                 # maxlines (posicao 0 fantasma)
-    return (k - 1) % n + 1, (k - 1) // n + 1
+def _dmet_linha(state, iw):
+    """Linha `dmet1(iw,1:13)` como lista 0-based (ver ponto de atencao 1)."""
+    return [float(state.dmet1[iw, k]) for k in range(1, 14)]
 
 
-def _dmet_seq(state):
-    """`dmet(1:13)` como o dummy de `lowveg_met` o enxerga (ponto 1)."""
-    return [float(state.dmet1[_dmet_pos(state, k)]) for k in range(1, 14)]
-
-
-def _dmet_seq_grava(state, dmet):
+def _dmet_grava(state, iw, dmet):
     for k in range(1, 14):
-        state.dmet1[_dmet_pos(state, k)] = dmet[k - 1]
+        state.dmet1[iw, k] = dmet[k - 1]
 
 
-def _snow_model(state, ow, sprint, sdensi):
+def _snow_model(state, ow, sprint, sdensi, phie):
     """Adaptador de `call snow_model(sprint,water_flag,first_snow,sdensi,hsaccum,phie)`.
 
-    `phie` e `intent(out)` la (`phie1`): o valor de entrada nao e lido.
+    Interface assumida -- ver docstring do modulo.
     """
     first_snow, hsaccum, phie = snow_model(
-        state, ow.snow, sprint, state.water_flag, ow.first_snow, sdensi,
-        state.hsaccum)
+        state, sprint, state.water_flag, ow.first_snow, sdensi, state.hsaccum, phie)
     ow.first_snow = first_snow
     state.hsaccum = hsaccum
     return phie
@@ -395,11 +379,11 @@ def open_water(state: FasstState, ow: OpenWaterState, wtype, sprint, wvel, wdept
             stempt = state.dmet1[iw, 13]
         taf = ((1.0 - 7e-1 * state.sigfl) * state.dmet1[iw, 4]
                + state.sigfl * (6e-1 * state.ftemp + 1e-1 * stempt))           # foliage temp at the ground surface (K)
-        dmet = _dmet_seq(state)                   # sic: dmet1 inteiro (ponto 1)
+        dmet = _dmet_linha(state, iw)
         rhoaf, cf, pheatf, rpp, mixra, mixrf, dqdtf = lowveg_met(
             state, ow.lowveg, d1i, d1i, int(state.met[iw, MetCol.PT]),
             int(state.met[iw, MetCol.PT2]), mixrgr, rhsurf, taf, dmet, wetbulba)
-        _dmet_seq_grava(state, dmet)
+        _dmet_grava(state, iw, dmet)
         state.ft[iw] = state.ftemp
         state.surfemisf[iw] = state.epf
     else:
@@ -428,7 +412,7 @@ def open_water(state: FasstState, ow: OpenWaterState, wtype, sprint, wvel, wdept
     # compute snow depth (linhas 246-268)
     if (state.hsaccum > EPS
             or (_aint(state.met[iw, MetCol.PT]) == 3 or _aint(state.met[iw, MetCol.PT2]) == 3)):
-        phie = _snow_model(state, ow, sprint, sdensi)
+        phie = _snow_model(state, ow, sprint, sdensi, phie)
 
         state.vsmelt = state.vsmelt * 1e-2                                      # m
         if state.error_type == 4:
