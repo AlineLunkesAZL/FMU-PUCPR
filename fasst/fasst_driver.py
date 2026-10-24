@@ -118,9 +118,11 @@ fasst_main.py tem de converter o `dmet` 1-based de `surfenergy` para o
   * `phie` em `_ro_soil.dat` no caso sem neve: local nao inicializada de
     `open_water`, lixo de pilha no Fortran, 0.0 aqui (ponto 3 de
     open_water.py);
-  * `sgralbedo` e `stor(6)` em `_ro_soil.dat` no caso com dossel: NaN no
-    Fortran, 0.0 aqui, calculados em `module_canopy`/`albedo_emis` --
-    PENDENTE daqueles modulos;
+  * `stor(6)` (= `storcs(3)`) em `_ro_soil.dat` no caso com dossel: bits
+    `...E7FFFFFF` no Fortran (memoria nao inicializada, nao NaN
+    aritmetico), 0.0 aqui -- PENDENTE de `module_canopy`. (`sgralbedo`,
+    que tambem divergia, era `albedo_emis` descartando o NaN no
+    `max(min())`; corrigido, sobra so o bit de sinal do NaN);
   * o `.snw` (unidade 55): 1 byte nas linhas que `snow_model` grava
     antes de qualquer atribuicao a `meltfl` -- NUL no Fortran (o
     gfortran zera a global indefinida), branco aqui (regra D2; ver

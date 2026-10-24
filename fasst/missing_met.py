@@ -151,9 +151,10 @@ def _fill_solar_ir(state, met2, c3):
         prcp = row[MetCol.PREC] + row[MetCol.PREC2]
 
         sdir, sdif, tsol_new, icld, cover, hgt = Solflx(
-            state, icld, row[MetCol.ZEN], row[MetCol.DOY], prcp,
-            row[MetCol.TSOL], cover, hgt,
+            state, icld[1:], row[MetCol.ZEN], row[MetCol.DOY], prcp,
+            row[MetCol.TSOL], cover[1:], hgt[1:],
         )
+        icld, cover, hgt = [0] + list(icld), [0.0] + list(cover), [0.0] + list(hgt)
         row[MetCol.DIR] = sdir
         row[MetCol.DIF] = sdif
         row[MetCol.TSOL] = tsol_new
@@ -480,10 +481,11 @@ def missing_met(state: FasstState, wmode, ipos, ie, met1):
 
                         prcp = state.met[i][MetCol.PREC] + state.met[i][MetCol.PREC2]
 
-                        sdir, sdif, _tsol_new, icld, cover, hgt = Solflx(
-                            state, icld, state.met[i][MetCol.ZEN], state.met[i][MetCol.DOY],
-                            prcp, state.met[i][MetCol.TSOL], cover, hgt,
+                        sdir, sdif, state.met[i][MetCol.TSOL], icld, cover, hgt = Solflx(
+                            state, icld[1:], state.met[i][MetCol.ZEN], state.met[i][MetCol.DOY],
+                            prcp, state.met[i][MetCol.TSOL], cover[1:], hgt[1:],
                         )
+                        icld, cover, hgt = [0] + list(icld), [0.0] + list(cover), [0.0] + list(hgt)
                         state.met[i][MetCol.DIR] = sdir
                         state.met[i][MetCol.DIF] = sdif
 

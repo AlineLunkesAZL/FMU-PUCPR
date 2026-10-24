@@ -92,8 +92,10 @@ Known, UNCORRECTED points (all doc-verified; do not silently "fix")
   named constant. When tripped, the Fortran does ``write(10, ...)`` --
   hardcoded unit 10, guarded by ``single_multi_flag == 0`` -- substitutes
   ``stempt = dmet(4)`` (air temperature for surface temperature,
-  silently), and sets ``error_code = 1, error_type = 3``. Transcribed as a
-  ``warnings.warn`` plus the same state writes; ``_STEMPT_FLOOR = 35.9``.
+  silently), and sets ``error_code = 1, error_type = 3``. Transcribed as the
+  same write to ``state.unit10`` (``warnings.warn`` only when no unit 10 is
+  open, e.g. in unit tests) plus the same state writes;
+  ``_STEMPT_FLOOR = 35.9``.
 * doc point 4 -- negative ``sfac`` for open water without ice. Line 366:
   ``sfac = 1d0 - dexp(0.4d0)`` evaluates to ~-0.492 (note the POSITIVE
   exponent, unlike every sibling line which uses ``dexp(-t2)``). A
@@ -568,12 +570,12 @@ def surfenergy(
             if state.met is not None:
                 day = int(state.met[iw, MetCol.DOY])
                 hour = int(state.met[iw, MetCol.HR])
-            warnings.warn(
-                f"freq_id {state.freq_id} toptemp = {stempt:.3f} airtemp = {dmet[D.TAIR_K]:.3f} "
-                f"Top temp too low in surfenergy; day {day} hour {hour}",
-                RuntimeWarning,
-                stacklevel=2,
-            )
+            msg = ("freq_id%10dtoptemp = %8.3f airtemp = %8.3f Top temp too low in surfenergy.f; "
+                   "day%4d hour%4d" % (state.freq_id, stempt, dmet[D.TAIR_K], day, hour))
+            if state.unit10 is not None:
+                state.unit10.write(msg + "\n")
+            else:
+                warnings.warn(msg, RuntimeWarning, stacklevel=2)
         stempt = dmet[D.TAIR_K]
         state.error_code = 1
         state.error_type = 3

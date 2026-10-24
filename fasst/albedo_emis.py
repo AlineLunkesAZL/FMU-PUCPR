@@ -67,7 +67,7 @@ Pontos de atencao
 import math
 from dataclasses import dataclass
 
-from .constants import EPS, IALBEDO, IEMIS, SEMIS, SNALBEDO, SOALBEDO, TREF
+from .constants import PI, EPS, IALBEDO, IEMIS, SEMIS, SNALBEDO, SOALBEDO, TREF
 from .indices import MetCol
 from .state import FasstState
 
@@ -128,10 +128,11 @@ def albedo_emis(state: FasstState, alb: AlbedoEmisState, oldsd, sd, su):
         a = 0.0
         a = math.exp(-1.0) + 0.23865 * state.soil_moist[state.nnodes] / state.nsoilp[state.nnodes][9]
         state.sgralbedo = -state.nsoilp[state.nnodes][3] * math.log(a)
-        state.sgralbedo = max(
-            0.5 * state.nsoilp[state.nnodes][3],
-            min(state.nsoilp[state.nnodes][3], state.sgralbedo),
-        )
+        if state.sgralbedo == state.sgralbedo:  # NaN propaga no dmax1/dmin1 aninhado do gfortran
+            state.sgralbedo = max(
+                0.5 * state.nsoilp[state.nnodes][3],
+                min(state.nsoilp[state.nnodes][3], state.sgralbedo),
+            )
 
         # emissividade -- interpolacao linear com a umidade
         a = 0.0
@@ -141,7 +142,7 @@ def albedo_emis(state: FasstState, alb: AlbedoEmisState, oldsd, sd, su):
     elif state.ntype[state.nnodes] == 26:  # water
         # reflectancia de Fresnel (media das polarizacoes) a partir do
         # angulo zenital solar e do angulo de refracao (Snell, n=1.33)
-        Z = state.met[state.iw][MetCol.ZEN] * math.pi / 180.0
+        Z = state.met[state.iw][MetCol.ZEN] * PI / 180.0
         r = math.asin(math.sin(Z) / 1.33)
         if Z + r > 0.0:
             state.sgralbedo = 50.0 * (
