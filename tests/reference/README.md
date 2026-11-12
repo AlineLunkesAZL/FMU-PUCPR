@@ -80,6 +80,24 @@ Os valores são os números impressos pelo FASST, sem reformatar.
 `fst` = superfície, `flx` = fluxos de energia, `vgt` = vegetação, `grd` = perfil do solo
 (12 nós por hora, chave `N`).
 
+## Comparação oficial com o Fortran
+
+Feita com o `comparar_com_fortran.py` do pacote da orientadora (sha256
+`b5ba88ccc6a0a117…`, tolerância padrão 0,01), num ambiente virtual separado com pandas 3.1.1
+(o pandas não faz parte do ambiente da baseline). Para cada caso e saída:
+
+```
+python comparar_com_fortran.py tests/inputs/grayling/A_solo_nu/ref_fst.csv tests/reference/2026-11-12-grayling-A-fst.csv
+```
+
+| caso | fst | flx | vgt | grd |
+|---|---|---|---|---|
+| A (solo nu) | IGUAL AO FORTRAN | IGUAL AO FORTRAN | IGUAL AO FORTRAN | IGUAL AO FORTRAN |
+| B (grama) | IGUAL AO FORTRAN | IGUAL AO FORTRAN | IGUAL AO FORTRAN | IGUAL AO FORTRAN |
+
+Todas as linhas casadas (648 por arquivo, 7 776 no perfil). Nas 158 colunas numéricas a
+diferença máxima é 0; as 6 colunas de texto (`FTU`, `USCS`, `FT`) são iguais.
+
 ## Determinismo
 
 O comando foi rodado duas vezes, em diretórios de saída diferentes. Os 8 CSVs saíram idênticos
