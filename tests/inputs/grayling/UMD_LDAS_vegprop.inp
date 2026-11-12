@@ -1,0 +1,47 @@
+UMD_defaultvegprop.inp
+This file contains both the "canopy" and "lowveg" vegetation properties needed by FASST.
+Columns are:
+ 0    veg id
+ 1    maximum stomatal resistance (s/m)
+ 2    minimum stomatal resistance (s/m)
+ 3    maximum coverage (%)
+ 4    minimum coverage (%)
+ 5    roughness length (m)
+ 6    maximum LAI
+ 7    minimum LAI
+ 8    maximum dew depth (mm)
+ 9    stem area index (SAI)
+ 10   ar, root distribution calculation coeff.
+ 11   br, root distribution calculation coeff.
+ 12   minimum emissivity (%)
+ 13   maximum emissivity (%)
+ 14   minimum absorptivity (%) (1 - albedo)
+ 15   maximum absorptivity (%) (1 - albedo)
+ 16   minimum height (cm)
+ 17   maximum height (cm)
+
+Vegetation types (veg_type) based on UMD parameterization and numbering systems.\par
+ 1 = Evergreen Needleleaf Forest 8 = Closed Shrublland
+ 2 = Evergreen Broadleaf Forest  9 = Open Shrubland
+ 3 = Deciduous Needleleaf Forest 10 = Grassland
+ 4 = Deciduous Broadleaf Forest  11 = Cropland
+ 5 = Mixed Cover                 12 = Bare Ground
+ 6 = Woodland                    13 = Urban/Built Up
+ 7 =Wooded Grassland             14 = Water/Goode's Interrupted Space
+        1          2           3           4             5           6           7      8           9     10     11     12     13     14           15            16           17
+ 1  999d0,     175d0,      0.8d0,      0.1d0,       0.98d0,        6d0,        5d0, 999d0,        2d0, 999d0, 999d0, 999d0, 999d0, 999d0,     0.302d0,        850d0,      1700d0   !evergreen needleleaf forest
+ 2  999d0,     150d0,      0.9d0,      0.5d0,2.206666667d0,        6d0,        5d0, 999d0,        2d0, 999d0, 999d0, 999d0, 999d0, 999d0,      0.35d0,        100d0,      3500d0   !evergreen broadleaf forest
+ 3  999d0,     175d0,      0.8d0,      0.3d0,0.923333333d0,        6d0,        1d0, 999d0,        2d0, 999d0, 999d0, 999d0, 999d0, 999d0,     0.302d0,        750d0,      1550d0   !deciduous needleleaf forest
+ 4  999d0,     175d0,      0.8d0,      0.3d0,0.906666667d0,    5.985d0,    0.995d0, 999d0,    1.995d0, 999d0, 999d0, 999d0, 999d0, 999d0,      0.38d0,       1150d0,      2000d0   !deciduous broadleaf forest
+ 5  999d0,     175d0,    0.795d0,    0.205d0,0.873333333d0,    5.975d0, 2.875999d0, 999d0,     1.99d0, 999d0, 999d0, 999d0, 999d0, 999d0,     0.336d0,       1000d0,      1925d0   !mixed cover
+ 6  999d0,  173.51d0, 0.799863d0, 0.170072d0,0.828791333d0,5.6967535d0,3.3624995d0, 999d0,2.1141505d0, 999d0, 999d0, 999d0, 999d0, 999d0, 0.3473688d0,752.0573333d0,   1433.79d0   !woodland
+ 7  999d0,  169.15d0, 0.801837d0, 0.186838d0,   0.506846d0, 4.631522d0,  1.98095d0, 999d0, 2.602294d0, 999d0, 999d0, 999d0, 999d0, 999d0, 0.4141252d0,   360.4261d0,    704.26d0   !wooded grassland
+ 8  999d0,     175d0, 0.625005d0,  0.18802d0,0.139729333d0,   5.0672d0,   1.3859d0, 999d0,   2.4439d0, 999d0, 999d0, 999d0, 999d0, 999d0, 0.4000912d0,    74.4676d0,    6.0027d0   !closed shrubland
+ 9  999d0,  178.87d0, 0.218175d0,  0.12474d0,0.083377133d0,   6.0023d0, 0.636425d0, 999d0, 1.905775d0, 999d0, 999d0, 999d0, 999d0, 999d0,0.41174884d0,  8.6151667d0,    51.346d0   !open shrubland
+10  999d0,     165d0,  0.72552d0,  0.10842d0,    0.04832d0,   2.6424d0,   0.6539d0, 999d0,   3.6688d0, 999d0, 999d0, 999d0, 999d0, 999d0, 0.4687448d0,          4d0,56.6666666d0   !grassland
+11  999d0,117.1085d0,0.8353665d0,0.5507605d0,   0.114918d0,5.9765255d0,0.7791665d0, 999d0,  0.71528d0, 999d0, 999d0, 999d0, 999d0, 999d0,  0.399306d0,        5.5d0,        55d0   !cropland
+12  999d0,     175d0,  0.07489d0,  0.02663d0,  0.0494185d0,   0.7439d0, 0.064075d0, 999d0,    1.145d0, 999d0, 999d0, 999d0, 999d0, 999d0, 0.3048425d0,          5d0,        20d0   !bareground
+13  999d0,  154.84d0,   0.7436d0, 0.306735d0,0.231561733d0,    4.757d0,   1.1851d0, 999d0, 1.960825d0, 999d0, 999d0, 999d0, 999d0, 999d0,0.39585784d0,359.8630333d0, 601.72575d0   !urban/built up
+14  999d0,     175d0,        0d0,        0d0,     0.0012d0,        0d0,        0d0, 999d0,        2d0, 999d0, 999d0, 999d0, 999d0, 999d0,       0.2d0,        999d0,       999d0   !water/goode's interrupted space
+
+ 

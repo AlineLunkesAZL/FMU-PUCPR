@@ -1,0 +1,55 @@
+FASST_defaultvegprop.inp
+This file contains both the "canopy" and "lowveg" vegetation properties needed by FASST.
+Columns are:
+ 0    veg id
+ 1    maximum stomatal resistance (s/m)
+ 2    minimum stomatal resistance (s/m)
+ 3    maximum coverage (%)
+ 4    minimum coverage (%)
+ 5    roughness length (m)
+ 6    maximum LAI
+ 7    minimum LAI
+ 8    maximum dew depth (mm)
+ 9    stem area index (SAI)
+ 10   ar, root distribution calculation coeff.
+ 11   br, root distribution calculation coeff.
+ 12   minimum emissivity (%)
+ 13   maximum emissivity (%)
+ 14   minimum absorptivity (%) (1 - albedo)
+ 15   maximum absorptivity (%) (1 - albedo)
+ 16   minimum height (cm)
+ 17   maximum height (cm)
+
+Vegetation types (veg_type) based on BATS parameterizations and numbering system
+ LOW vegetation types: 1, 2, 7-11, 13, 16, 17
+ HIGH vegetation types: 3-6, 18
+ NON vegetation types: 12, 14, 15
+    1 = crop/mixed farming (l)          10 = irrigated crop (l)
+    2 = short grass (l)                 11 = semidesert (l)
+    3 = evergreen needle-leaf(h)        12 = ice cap/glacier (n)
+    4 = deciduous needle-leaf(h)        13 = bog/marsh (l)
+    5 = deciduous broadleaf(h)          14 = inland water (n)
+    6 = evergreen broadleaf(h)          15 = ocean (n)
+    7 = tall grass (l)                  16 = evergreen shrub (l)
+    8 = desert (l)                      17 = decidous shrub (l)
+    9 = tundra (l)                      18 = mixed woodland(h)
+     1      2     3     4      5      6     7      8       9      10      11        12      13       14      15     16     17 
+1  500d0, 120d0, 85d0, 25d0, 0.06d0, 6d0, 0.5d0, 0.20d0,0.5d0, 5.558d0, 2.614d0,   90d0,   96d0,    70d0,   85d0,   5d0,  90d0  !crops
+2  500d0, 200d0, 80d0, 70d0, 0.02d0, 2d0, 0.5d0, 0.20d0,  4d0,10.739d0, 2.608d0,   90d0,   96d0,    70d0,   85d0,   5d0,  50d0  !short grass
+3  500d0, 200d0, 80d0, 70d0,    1d0, 6d0,   5d0, 0.25d0,  2d0, 6.706d0, 2.175d0,   90d0,   99d0,   7.9d0,  22.9d0,  0d0,2550d0  !evergreen needle
+4  500d0, 200d0, 80d0, 50d0,    1d0, 6d0,   1d0, 0.10d0,  2d0, 7.066d0, 1.953d0,   90d0,   99d0,   7.9d0,  22.9d0,  0d0,2100d0  !decid needle
+5  500d0, 200d0, 80d0, 50d0, 0.80d0, 6d0,   1d0, 0.10d0,  2d0  7.344d0, 1.303d0,   90d0,   97d0,   3.8d0,  25.5d0,  0d0,3150d0  !decid broad
+6  500d0, 150d0, 90d0, 40d0,    2d0, 6d0,   5d0, 0.25d0,  2d0  5.990d0, 1.955d0,   90d0,   97d0,   3.8d0,  25.5d0,  0d0,3600d0  !evergreen broad
+7  500d0, 200d0, 80d0, 50d0, 0.10d0, 6d0, 0.5d0, 0.20d0,  4d0, 8.235d0, 1.627d0,   90d0,   96d0,    70d0,    85d0,  5d0,  90d0  !tall grass
+8  500d0, 200d0,  5d0,  0d0, 0.05d0, 2d0,   0d0, 0.20d0,0.5d0, 4.372d0, 0.978d0,   90d0,   96d0,    70d0,    85d0,  5d0,  50d0  !desert
+9  500d0, 200d0, 60d0, 40d0, 0.04d0, 6d0, 0.5d0, 0.20d0,0.5d0  8.992d0, 8.992d0,   90d0,   96d0,    70d0,    85d0,  5d0,  90d0  !tundra
+10 500d0, 200d0, 80d0, 20d0, 0.06d0, 6d0, 0.5d0, 0.20d0,  2d0, 5.558d0, 2.614d0,   90d0,   96d0,    70d0,    85d0,  5d0,  90d0  !irregated crop
+11 500d0, 200d0, 10d0,  0d0, 0.10d0, 6d0, 0.5d0, 0.20d0,  2d0, 4.372d0, 0.978d0,   90d0,   96d0,    70d0,    85d0,  5d0,  90d0  !semidesert
+12   1d0,   0d0,  0d0,  0d0, 0.01d0, 0d0,   0d0,    0d0,  2d0,     0d0,     0d0,    0d0,    0d0,     0d0,     0d0,  0d0,   0d0  !ice cap/glacier
+13 500d0, 200d0, 80d0, 40d0, 0.03d0, 6d0, 0.5d0, 0.20d0,  2d0, 7.344d0, 1.303d0,   90d0,   96d0,    70d0,    85d0,  5d0,  90d0  !bog/marsh
+14   1d0,   0d0,  0d0,  0d0,    0d0, 0d0,   0d0,    0d0,  2d0,     0d0,     0d0,    0d0,    0d0,     0d0,     0d0,  0d0,   0d0  !inland water
+15   1d0,   0d0,  0d0,  0d0,    0d0, 0d0,   0d0,    0d0,  2d0,     0d0,     0d0,    0d0,    0d0,     0d0,     0d0,  0d0,   0d0  !oceans
+16 500d0, 200d0, 80d0, 60d0, 0.10d0, 6d0,   5d0, 0.25d0,  2d0, 6.326d0, 1.567d0,   90d0,   96d0,    70d0,    85d0,  5d0, 185d0  !evergreen shrub
+17 500d0, 200d0, 80d0, 50d0, 0.10d0, 6d0,   1d0, 0.10d0,  2d0, 6.326d0, 1.567d0,   90d0,   96d0,    70d0,    85d0,  5d0, 185d0  !decid shrub
+18 500d0, 200d0, 80d0, 60d0, 0.80d0, 6d0,   3d0, 0.20d0,  2d0, 4.453d0, 1.632d0,   90d0,   98d0,   5.8d0,  24.2d0,  0d0,3000d0  !mixed woods
+    

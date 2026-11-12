@@ -1,0 +1,20 @@
+grayling_1992.met            ! clima do Grayling (15/09 a 26/10/1992)
+0 0 2 -1                     ! infer_test single_multi_flag mgap keep(-1 = todos os passos)
+-1 60 1 1 0 100 1            ! gwl(<0 calcula) vegint(min) nprint flprint sprint frozen mstflag
+1                            ! vitd_index
+saida.fst                    ! superficie
+saida.grd                    ! perfil por no
+saida.flx                    ! fluxos
+saida.vgt                    ! vegetacao
+saida.snw                    ! neve
+0 0                          ! declividade orientacao
+0                            ! rugosidade (0 = automatica)
+0                            ! water_flag (terra)
+0 0                          ! neve inicial, SWE
+0                            ! gelo inicial
+0                            ! vegl_type = 0: SEM vegetacao baixa
+0                            ! vegh_type = 0: SEM dossel
+1                            ! 1 camada
+6 2.0                        ! SP (areia mal graduada), 2 m
+n                            ! sem temperaturas iniciais
+n                            ! sem umidades iniciais

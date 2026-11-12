@@ -20,17 +20,24 @@ máxima 0,0 na precisão que o Fortran grava (648 linhas por arquivo e 7 776 no 
 
 ## Comando exato
 
-Executado da raiz do repositório:
+Executado da raiz do repositório, só com arquivos versionados:
 
 ```
-python -B tests/2026-11-12-gerar_baseline_grayling.py "C:/Users/gelen/Área de Trabalho/referencia_fortran_grayling" exemplo tests/reference
+python -B tests/2026-11-12-gerar_baseline_grayling.py tests/inputs/grayling tests/inputs/grayling tests/reference
 ```
+
+Os CSVs foram gerados originalmente a partir do pacote `referencia_fortran_grayling` e das
+tabelas de `exemplo/`. Rodar o comando acima, com as cópias em `tests/inputs/grayling/`,
+reproduz os 8 CSVs byte a byte.
 
 O script copia as entradas de cada caso para um diretório temporário e roda
 `fasst.fasst_driver.main(['fasst_driver', 'fassti.inp'])` num processo novo. Depois
 converte `saida.fst/.flx/.vgt/.grd` em CSV. Cada execução completa (A e B) leva cerca de 8 min.
 
 ## Arquivos de entrada
+
+Todos versionados em `tests/inputs/grayling/`, com os nomes originais (o FASST os abre pelo
+nome, por isso não seguem o padrão de data).
 
 | arquivo | origem | sha256 |
 |---|---|---|
@@ -39,13 +46,16 @@ converte `saida.fst/.flx/.vgt/.grd` em CSV. Cada execução completa (A e B) lev
 | `FASST_defaultvegprop.inp` | pacote | `e2e9f1b32c28eeb4faedd60675f084b6a8fe7712a1110322d16747366e3a34e5` |
 | `A_solo_nu/fassti.inp` | pacote | `7d82b4fbdc04f87ca2c9cefae5ee2679a9763e86f90b5e8ba017c33b8ff077be` |
 | `B_grama/fassti.inp` | pacote | `1b52bee75a219367ba33e646f74f0c750d519044a0672d767130b63383ad0477` |
-| `MODIS_IGBP_vegprop.inp` | `exemplo/` deste repo | `d3331b5a207f24434ffdee5cd08d9964c3dd645373007edf7f35e1ba0312eb5d` |
-| `UMD_LDAS_vegprop.inp` | `exemplo/` deste repo | `8aa4bd0c2293558c8e97b04d677b785b6238e07c5dc4218b6e2b368c2d1a2002` |
-| `fasstusersoil.inp` | `exemplo/` deste repo (vazio) | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` |
+| `MODIS_IGBP_vegprop.inp` | tabela padrão do FASST (cópia de `exemplo/`) | `d3331b5a207f24434ffdee5cd08d9964c3dd645373007edf7f35e1ba0312eb5d` |
+| `UMD_LDAS_vegprop.inp` | tabela padrão do FASST (cópia de `exemplo/`) | `8aa4bd0c2293558c8e97b04d677b785b6238e07c5dc4218b6e2b368c2d1a2002` |
+| `fasstusersoil.inp` | vazio (cópia de `exemplo/`) | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` |
 
 Os três últimos não vêm no pacote, mas o driver Python exige que existam. No caso A, o
-resultado é idêntico com essas tabelas e com arquivos vazios. O pacote e `exemplo/` não estão
-versionados no git; por isso os sha256 acima.
+resultado é idêntico com essas tabelas e com arquivos vazios.
+
+Também estão em `A_solo_nu/` e `B_grama/` os `ref_*.csv` do pacote: a resposta do FASST Fortran
+nas mesmas 648 h. O script usa o cabeçalho deles como nomes de coluna dos CSVs, e eles servem
+para a comparação com o Fortran (`comparar_com_fortran.py`).
 
 ## Saídas
 

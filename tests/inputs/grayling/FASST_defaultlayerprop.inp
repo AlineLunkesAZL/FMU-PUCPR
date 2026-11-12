@@ -1,0 +1,69 @@
+FASST_defaultlayerprop.inp
+This file contains the "ground" material properties needed by FASST.
+Columns are:
+  1   soil id
+  2   soil type
+  3   dry density (g/cm3)
+  4   porosity (unitless)
+  5   dry emissivity (unitless)
+  6   dry albedo (unitless)
+  7   saturated hydraulic conductivity (cm/s)
+  8   minimum water content (vol/vol)
+  9   maximum water content (vol/vol)
+  10  1/(van Genuchten's alpha) (cm)
+  11  van Genuchten's exponent, n (unitless)
+  12  dry specific heat (J/kg*K)
+  13  organic fraction (vol/vol)
+  14  percent sand
+  15  percent silt
+  16  percent clay
+    2    3        4       5      6       7          8      9       10         11      12       13    14   15   16 
+1  GW 1.947d0  0.293d0 0.92d0 0.40d0 1.1197d-2   0.01d0 0.293d0 22.6125d0  3.45d0   820.0d0   0d0   5d0  2d0  3d0
+2  GP 2.079d0  0.228d0 0.92d0 0.40d0 3.0556d-4   0.01d0 0.228d0 22.6125d0  3.45d0   820.0d0   0d0   5d0  2d0  3d0
+3  GM 1.903d0  0.305d0 0.92d0 0.40d0 2.0764d-4   0.01d0 0.305d0 42.8530d0  2.16d0   820.0d0   0d0  10d0 15d0  7d0
+4  GC 2.133d0  0.198d0 0.92d0 0.40d0 1.1498d-4   0.01d0 0.198d0 69.1416d0  1.58d0   820.0d0   0d0  10d0 13d0 32d0
+5  SW 1.657d0  0.375d0 0.92d0 0.40d0 3.2785d-4   0.01d0 0.375d0 33.2125d0  3.45d0   830.0d0   0d0  92d0  5d0  3d0
+6  SP 1.643d0  0.375d0 0.92d0 0.35d0 3.2785d-4   0.01d0 0.375d0 33.2125d0  3.45d0   816.4d0   0d0  92d0  5d0  3d0
+7  SM 1.640d0  0.385d0 0.92d0 0.35d0 2.8774d-4   0.01d0 0.385d0 53.4530d0  2.16d0   850.6d0   5d-2 78d0 15d0  7d0
+8  SC 1.626d0  0.385d0 0.92d0 0.35d0 9.9982d-5   0.01d0 0.385d0 79.7416d0  1.58d0   830.0d0   5d-2 55d0 13d0 32d0
+9  ML 1.458d0  0.453d0 0.94d0 0.40d0 6.1388d-5   0.01d0 0.453d0 219.505d0  1.80d0   845.7d0   1d-1 34d0 47d0 19d0
+10 CL 1.528d0  0.430d0 0.97d0 0.23d0 5.7170d-5   0.01d0 0.430d0 193.728d0  1.76d0   854.1d0   1d-1 33d0 37d0 30d0
+11 OL 1.480d0  0.407d0 0.96d0 0.27d0 8.4709d-5   0.01d0 0.407d0 240.558d0  1.59d0   837.4d0 2.5d-1 40d0 46d0 14d0
+12 CH 1.445d0  0.468d0 0.98d0 0.30d0 4.2492d-5   0.01d0 0.468d0 172.287d0  4.39d0   845.7d0   1d-1 15d0 38d0 47d0
+13 MH 1.529d0  0.464d0 0.94d0 0.30d0 3.5962d-5   0.01d0 0.464d0 294.432d0  1.75d0   830.0d0   1d-1 22d0 34d0 44d0
+14 OH 1.568d0  0.437d0 0.96d0 0.27d0 5.5918d-5   0.01d0 0.437d0 210.121d0  4.38d0   866.7d0 2.5d-1 30d0 36d0 34d0
+15 PT 0.150d0  0.822d0 0.92d0 0.40d0 2.2185d-4   0.01d0 0.822d0 56.0402d0  1.20d0  1923.0d0 8.0d-1  1d0  1d0  3d0
+16 MC 1.658d0  0.384d0 0.92d0 0.40d0 2.0479d-4   0.01d0 0.384d0 76.0162d0  1.89d0   830.0d0   5d-2 65d0 23d0 12d0
+17 CM 1.551d0  0.416d0 0.96d0 0.30d0 6.1540d-5   0.01d0 0.416d0 277.983d0  1.62d0   830.0d0   1d-2 34d0 51d0 15d0
+18 EV 1.657d0  0.375d0 0.98d0 0.78d0 3.2785d-4   0.01d0 0.375d0 33.2125d0  3.45d0   830.0d0   0d0  92d0  5d0  3d0
+20 CO 2.185d0  0.020d0 0.90d0 0.40d0 1.0000d-10 0.001d0 0.020d0 50.0000d0  1.50d0   859.0d0   0d0   0d0  0d0  0d0
+21 AS 2.000d0  0.020d0 0.94d0 0.13d0 1.0000d-10 0.001d0 0.020d0 50.0000d0  1.50d0   850.0d0   0d0   0d0  0d0  0d0
+25 RO 2.700d0  0.020d0 0.89d0 0.40d0 1.0000d-10 0.001d0 0.020d0 50.0000d0  1.50d0   800.0d0   0d0   0d0  0d0  0d0
+26 WA 1.000d0  0.000d0 0.995d0 999d0    999d0   0.000d0 1.000d0 999.000d0 999.0d0  999.00d0   0d0   0d0  0d0  0d0
+27 AI 1.250d-3 1.000d0 0.00d0 0.00d0 0.0000d0   0.001d0 1.000d0 999.000d0 999.0d0 1004.64d0   0d0   0d0  0d0  0d0
+30 SN 0.929d0  0.020d0 0.90d0 0.70d0 1.0000d-10 0.001d0 0.020d0 50.0000d0  1.50d0  999.00d0   0d0   0d0  0d0  0d0
+
+NOTES:
+GW  well-graded gravels; gravel sand mixtures; little or no fines
+GP  poorly graded gravels; gravel-sand mixtures; little or no fines
+GM  slty gravels; gravel-sand-silt mixtures
+GC  clayey gravels; gravel-sand-clay mixtures
+SW  well-graded sands; gravelly sands; little or no fines
+SP  poorly graded sands; gravelly sands; little or no fines
+SM  silty sands; sand-silt mixtures
+SC  clayey sands; sand-clay mixtures
+ML  inorganic silts and very find sands; rock flour; silty or clayey fine sands ro clayey silts with slight plasticity
+CL  inorganic clays of low to medium plasticity; gravelly clays; sandy clays; silty clays; lean clays
+OL  organic slits and organic silty clays of low plasticity
+CH  inorganic clays; micaceous or diatomaceous fine sandy or silty soils; elastic silts
+MH  inorganic silts of high plasticity; fat clays
+OH  organic clays of medium to high plasticity; organic silts
+PT  peat and other organic soils
+MC  mixed SM and SC soils (SMSC)
+CM  mixed CL and ML soils (CLML)
+EV  evaporites - treated as SW except for albedo and emissivity
+CO  concrete
+AS  asphalt
+RO  bed rock - assumed to be granitic
+AI  air
+SN  permanent snow; glaciers

@@ -1,0 +1,67 @@
+MODIS_IGBP21_vegprop.inp
+This file contains both the "canopy" and "lowveg" vegetation properties needed by FASST.
+Columns are:
+ 1    veg id
+ 2    maximum stomatal resistance (s/m)
+ 3    minimum stomatal resistance (s/m)
+ 4    maximum coverage (%)
+ 5    minimum coverage (%)
+ 6    roughness length (m)
+ 7    maximum LAI
+ 8    minimum LAI
+ 9    maximum dew depth (mm)
+ 10   stem area index (SAI)
+ 11   ar, root distribution calculation coeff.
+ 12   br, root distribution calculation coeff.
+ 13   emissivity, min
+ 14   emissivity, max
+ 15   absorbtion, min
+ 16   absorbtion, max
+ 17   height, min (cm)
+ 18   height, max (cm)
+
+Vegetation types (veg_type) based on BATS parameterizations and numbering system
+1 = Evergreen Needleleaf Forest
+2 = Evergreen Broadleaf Forest
+3 = Deciduous Needleleaf Forest
+4 = Deciduous Broadleaf Forest
+5 = Mixed Forests
+6 = Closed Shrublands
+7 = Open Shrublands
+8 = Woody Savannas
+9 = Savannas
+10 = Grasslands
+11 = Permanent Wetlands
+12 = Croplands
+13 = Urban/Built Up
+14 = Cropland/Natural Vegetation Mosaic
+15 = Snow and Ice
+16 = Barren or Sparsely Vegetated
+17 = Water
+18 = Wooded Tundra
+19 = Mixed Tundra
+20 = Barren Tundra
+
+      1       2       3      4        5       6       7      8      9     10     11      12       13    14    15     16     17
+ 1 999d0, 999d0,  0.7d0, 999d0,   0.5d0,  6.4d0,    5d0, 999d0, 999d0, 999d0, 999d0, 0.95d0,  0.95d0, 0.05, 0.88, 999d0, 999d0
+ 2 999d0, 999d0, 0.95d0, 999d0,   0.5d0, 6.48d0, 3.08d0, 999d0, 999d0, 999d0, 999d0, 0.95d0,  0.95d0, 0.05, 0.88, 999d0, 999d0
+ 3 999d0, 999d0,  0.7d0, 999d0,   0.5d0, 5.16d0,    1d0, 999d0, 999d0, 999d0, 999d0, 0.93d0,  0.94d0, 0.06, 0.86, 999d0, 999d0
+ 4 999d0, 999d0,  0.8d0, 999d0,   0.5d0, 3.31d0, 1.85d0, 999d0, 999d0, 999d0, 999d0, 0.93d0,  0.93d0, 0.07, 0.84, 999d0, 999d0
+ 5 999d0, 999d0,  0.8d0, 999d0,   0.5d0,  5.5d0,  2.8d0, 999d0, 999d0, 999d0, 999d0, 0.93d0,  0.97d0, 0.03, 0.83, 999d0, 999d0
+ 6 999d0, 999d0,  0.7d0, 999d0,  0.05d0, 3.66d0,  0.5d0, 999d0, 999d0, 999d0, 999d0, 0.93d0,  0.93d0, 0.07, 0.75, 999d0, 999d0
+ 7 999d0, 999d0,  0.7d0, 999d0,  0.06d0,  2.6d0,  0.6d0, 999d0, 999d0, 999d0, 999d0, 0.93d0,  0.95d0, 0.05, 0.78, 999d0, 999d0
+ 8 999d0, 999d0,  0.7d0, 999d0,  0.05d0, 3.66d0,  0.5d0, 999d0, 999d0, 999d0, 999d0, 0.93d0,  0.93d0, 0.07, 0.75, 999d0, 999d0
+ 9 999d0, 999d0,  0.5d0, 999d0,  0.15d0, 3.66d0,  0.5d0, 999d0, 999d0, 999d0, 999d0, 0.92d0,  0.92d0, 0.08,  0.8, 999d0, 999d0
+10 999d0, 999d0,  0.8d0, 999d0,  0.12d0,  2.9d0, 0.52d0, 999d0, 999d0, 999d0, 999d0, 0.92d0,  0.96d0, 0.04, 0.81, 999d0, 999d0
+11 999d0, 999d0,  0.6d0, 999d0,   0.3d0, 5.72d0, 1.75d0, 999d0, 999d0, 999d0, 999d0, 0.95d0,  0.95d0, 0.04, 0.86, 999d0, 999d0
+12 999d0, 999d0,  0.8d0, 999d0,  0.15d0, 5.68d0, 1.56d0, 999d0, 999d0, 999d0, 999d0, 0.92d0, 0.985d0,0.015, 0.83, 999d0, 999d0
+13 999d0, 999d0,  0.1d0, 999d0,   0.5d0,    1d0,    1d0, 999d0, 999d0, 999d0, 999d0, 0.88d0,  0.88d0, 0.12, 0.85, 999d0, 999d0
+14 999d0, 999d0,  0.8d0, 999d0,  0.14d0, 4.29d0, 2.29d0, 999d0, 999d0, 999d0, 999d0, 0.92d0,  0.98d0, 0.02, 0.82, 999d0, 999d0
+15 999d0, 999d0,    0d0, 999d0, 0.001d0, 0.01d0, 0.01d0, 999d0, 999d0, 999d0, 999d0, 0.95d0,  0.95d0, 0.05, 0.45, 999d0, 999d0
+16 999d0, 999d0, 0.01d0, 999d0,  0.01d0, 0.75d0,  0.1d0, 999d0, 999d0, 999d0, 999d0,  0.9d0,   0.9d0,  0.1, 0.62, 999d0, 999d0
+17 999d0, 999d0,    0d0, 999d0,0.0001d0, 0.01d0, 0.01d0, 999d0, 999d0, 999d0, 999d0, 0.98d0,  0.98d0, 0.02, 0.92, 999d0, 999d0
+18 999d0, 999d0,  0.6d0, 999d0,   0.3d0, 3.35d0, 0.41d0, 999d0, 999d0, 999d0, 999d0, 0.93d0,  0.93d0, 0.07, 0.85, 999d0, 999d0
+19 999d0, 999d0,  0.6d0, 999d0,  0.15d0, 3.35d0, 0.41d0, 999d0, 999d0, 999d0, 999d0, 0.92d0,  0.92d0, 0.08, 0.85, 999d0, 999d0
+20 999d0, 999d0,  0.3d0, 999d0,   0.1d0, 3.35d0, 0.41d0, 999d0, 999d0, 999d0, 999d0,  0.9d0,   0.9d0,  0.1, 0.75, 999d0, 999d0
+
+ 
