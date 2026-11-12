@@ -1,0 +1,4 @@
+# Dependencias do FASST em Python (fasst/ e tests/). O resto e biblioteca padrao.
+# Versao fixa: a da baseline validada contra o Fortran (tests/reference/README.md).
+# Python 3.14.
+numpy==2.5.2
