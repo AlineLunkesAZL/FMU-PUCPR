@@ -1,0 +1,2 @@
+# baseline: bytes exatos, para o sha256 do README valer em qualquer checkout
+tests/reference/*.csv -text
