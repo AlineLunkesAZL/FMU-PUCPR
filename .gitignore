@@ -2,3 +2,4 @@ __pycache__/
 *.pyc
 NOTAS-fasst_driver.md
 cmp_fortran_agua.py
+*.F90
