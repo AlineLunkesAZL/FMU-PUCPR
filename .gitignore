@@ -3,3 +3,4 @@ __pycache__/
 NOTAS-fasst_driver.md
 cmp_fortran_agua.py
 *.F90
+tests/saida/
