@@ -25,7 +25,7 @@ O GitHub Actions roda os dois comandos a cada push e PR
 propósito logo na linha 0. Ele passa a valer quando o adaptador chamar a `FasstPasso`
 (issue #3).
 
-Colunas comparadas hoje (mapeamento provisório, até os Anexos A e B):
+Colunas comparadas hoje (lista completa em `docs/anexos-variaveis.md`, Anexos A e B):
 
 | saída do adaptador | coluna da baseline | casos |
 |---|---|---|
