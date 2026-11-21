@@ -1,0 +1,13 @@
+name: comparacao-baseline
+on: [push, pull_request]
+jobs:
+  grayling:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: pip install -r requirements.txt
+      - run: python -B tests/comparar_baseline_grayling.py --controle
+      - run: python -B tests/comparar_baseline_grayling.py
